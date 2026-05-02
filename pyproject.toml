@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tomodachi-drawing"
+version = "0.1.0"
+description = "Tomodachi Life drawing macro generator and Web UI."
+readme = "README.md"
+license = "PolyForm-Noncommercial-1.0.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "click<8",
+    "Flask==1.1.2",
+    "itsdangerous<2",
+    "Jinja2<3",
+    "MarkupSafe<2.1",
+    "numpy",
+    "nxbt==0.1.4",
+    "Pillow",
+    "tqdm",
+    "Werkzeug<2",
+]
+
+[project.scripts]
+tomodachi-webui = "webui:main"
+tomodachi-preview = "preview:main"
+tomodachi-sequence-preview = "sequence_preview:main"
+tomodachi-generate = "main:main"
+tomodachi-control = "ctrl:main"
+
+[tool.setuptools]
+py-modules = [
+    "ctrl",
+    "generate_color_calibration",
+    "generate_color_probe",
+    "main",
+    "main_brush",
+    "main_fast",
+    "preview",
+    "sequence_preview",
+    "tomodachi_common",
+    "webui",
+]

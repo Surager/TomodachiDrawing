@@ -1,0 +1,10 @@
+numpy
+Pillow
+tqdm
+click<8
+Flask==1.1.2
+itsdangerous<2
+Jinja2<3
+MarkupSafe<2.1
+nxbt==0.1.4
+Werkzeug<2
