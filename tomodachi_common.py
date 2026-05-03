@@ -51,7 +51,7 @@ SAT_RGB_LEVELS = np.array(
     dtype=np.float32,
 )
 
-BRUSH_SIZES = (1, 3, 5, 13, 19, 27)
+BRUSH_SIZES = (1, 3, 7, 13, 19, 27)
 BRUSH_LEVELS = {size: index for index, size in enumerate(BRUSH_SIZES)}
 
 MOVE_BUTTONS = {
@@ -369,7 +369,7 @@ def emit_color_switch(commands, current_color, target_color, press_text, wait_te
     color_gap_text = fmt_seconds(COLOR_SELECT_GAP) # 0.5s
     color_padding_text = fmt_seconds(COLOR_SELECT_PADDING) # 0.5s
 
-    commands.append(color_padding_text)
+    for _ in range(2): commands.append(color_padding_text) # 0.75s
     emit_button(commands, "Y", color_press_text, color_gap_text) # 0.1s + 0.5s
     emit_button(commands, "Y", color_press_text, color_gap_text) # 0.1s + 0.5s
 
@@ -387,7 +387,7 @@ def emit_color_switch(commands, current_color, target_color, press_text, wait_te
     
     commands.append(color_gap_text)
     emit_button(commands, "A", color_press_text, color_gap_text) # 0.1s + 0.5s
-    # commands.append(color_padding_text)
+    for _ in range(2): commands.append(color_padding_text) # 0.75s
     return normalize_color_after_selection(target_color)
 
 
@@ -400,7 +400,7 @@ def emit_brush_switch(commands, current_size, target_size, press_text, wait_text
     brush_gap_text = fmt_seconds(BRUSH_SELECT_GAP)
     brush_padding_text = fmt_seconds(BRUSH_SELECT_PADDING)
 
-    commands.append(brush_padding_text)
+    for _ in range(2): commands.append(brush_padding_text) # 0.75s
     emit_button(commands, "X", brush_press_text, brush_gap_text)
     emit_button(commands, "X", brush_press_text, brush_gap_text)
 
@@ -417,7 +417,7 @@ def emit_brush_switch(commands, current_size, target_size, press_text, wait_text
 
     emit_button(commands, "A", brush_press_text, brush_gap_text)
     emit_button(commands, "A", brush_press_text, brush_gap_text)
-    commands.append(brush_padding_text)
+    for _ in range(2): commands.append(brush_padding_text) # 0.75s
     return target_size
 
 
