@@ -3,7 +3,7 @@ import sys
 
 import numpy as np
 
-from tomodachi_common import (
+from .tomodachi_common import (
     COLOR_PANEL_HOME,
     build_color_layers,
     build_column_path,

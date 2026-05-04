@@ -3,7 +3,8 @@ import sys
 
 import numpy as np
 
-from tomodachi_common import (
+from .main_brush import generate_commands as generate_brush_commands
+from .tomodachi_common import (
     COLOR_PANEL_HOME,
     build_color_layers,
     emit_canvas_move,
@@ -12,7 +13,6 @@ from tomodachi_common import (
     load_quantized_image,
     order_row_snake,
 )
-from main_brush import generate_commands as generate_brush_commands
 
 
 def parse_args():

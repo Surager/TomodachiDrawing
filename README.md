@@ -10,13 +10,21 @@ This repository implements tooling for converting raster artwork into timed cont
 
 ## Repository structure
 
-- `main.py`: default entrypoint; `--mode pixel` for exact 1×1 drawing, `--mode brush` for coverage drawing
-- `main_fast.py`: faster pixel generator with basic path planning
-- `main_brush.py`: brush-aware generator using six brush sizes
-- `ctrl.py`: `nxbt` macro runner
-- `preview.py`: quantized image preview and pixel dump
-- `sequence_preview.py`: replays a generated button macro into a preview PNG
-- `webui.py`: Flask Web UI for controller connection, button testing, image upload, preview, and drawing progress
+Python sources live in the **`tomodachi_drawing/`** package; the repository root keeps licensing, dependency metadata, and READMEs only.
+
+| Module | Role |
+|--------|------|
+| `tomodachi_drawing/main.py` | Default CLI; `--mode pixel` for exact 1×1 drawing, `--mode brush` for coverage drawing |
+| `tomodachi_drawing/main_fast.py` | Faster pixel generator with basic path planning |
+| `tomodachi_drawing/main_brush.py` | Brush-aware generator using six brush sizes |
+| `tomodachi_drawing/ctrl.py` | `nxbt` macro runner |
+| `tomodachi_drawing/preview.py` | Quantized image preview and pixel dump |
+| `tomodachi_drawing/sequence_preview.py` | Replays a generated button macro into a preview PNG |
+| `tomodachi_drawing/webui.py` | Flask Web UI for controller connection, button testing, image upload, preview, and drawing progress |
+| `tomodachi_drawing/tomodachi_common.py` | Shared palette, quantization, and macro line helpers |
+| `tomodachi_drawing/generate_color_*.py` | Optional calibration / color-probe image generators |
+
+Runtime output (Web UI jobs, previews) still defaults to **`output/`** at the **repository root** (next to `tomodachi_drawing/`), not inside the package directory.
 
 ## Modeling assumptions
 
@@ -26,23 +34,23 @@ This repository implements tooling for converting raster artwork into timed cont
   - Hue: 200 steps
   - Saturation: 214 steps
   - Brightness: 112 steps
-- Brush footprints are square with odd side lengths: `1`, `3`, `5`, `13`, `19`, `27`.
+- Brush footprints are square with odd side lengths: `1`, `3`, `7`, `13`, `19`, `27`.
 - Brush selector state and color selector state persist across UI openings (as modeled by the generator).
 - Macro lines retain the `BUTTON 0.075s` convention, including `0.075s` dwell intervals.
 
 ## Typical workflow
 
 ```bash
-python main.py --mode pixel picture.png > macro.txt
-python main.py --mode brush picture.png > macro.txt
-python main.py --mode brush --merge-threshold 8 picture.png > macro.txt
-python ctrl.py macro.txt
-python preview.py picture.png -o preview.png --dump points.json
-python sequence_preview.py macro.txt -o sequence_preview.png
-python webui.py
+python -m tomodachi_drawing.main --mode pixel picture.png > macro.txt
+python -m tomodachi_drawing.main --mode brush picture.png > macro.txt
+python -m tomodachi_drawing.main --mode brush --merge-threshold 8 picture.png > macro.txt
+python -m tomodachi_drawing.ctrl macro.txt
+python -m tomodachi_drawing.preview picture.png -o preview.png --dump points.json
+python -m tomodachi_drawing.sequence_preview macro.txt -o sequence_preview.png
+python -m tomodachi_drawing.webui
 ```
 
-After starting `webui.py`, open `http://127.0.0.1:50000`.
+After starting the Web UI, open `http://127.0.0.1:50000`.
 
 If controller attachment fails, retain the terminal session and inspect the printed traceback. Prefer uninstrumented operation first; `--debug` disables Flask’s reloader to avoid extraneous processes around `nxbt`.
 
@@ -73,9 +81,9 @@ uv run tomodachi-control macro.txt
 
 ## Remarks
 
-- `main.py` defaults to pixel mode.
-- `ctrl.py` depends on `nxbt` and `tqdm`.
-- For throughput-oriented generation where strict per-pixel fidelity is secondary, `main_brush.py` is the recommended entrypoint.
+- `tomodachi_drawing.main` defaults to pixel mode.
+- `tomodachi_drawing.ctrl` depends on `nxbt` and `tqdm`.
+- For throughput-oriented generation where strict per-pixel fidelity is secondary, brush mode (`--mode brush`, implemented in `main_brush`) is the recommended entrypoint.
 
 ## Limitations
 

@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from tomodachi_common import (
+from .tomodachi_common import (
     BRUSH_HOME,
     BRUSH_LEVELS,
     BRUSH_SIZES,

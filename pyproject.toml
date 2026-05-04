@@ -24,22 +24,12 @@ dependencies = [
 ]
 
 [project.scripts]
-tomodachi-webui = "webui:main"
-tomodachi-preview = "preview:main"
-tomodachi-sequence-preview = "sequence_preview:main"
-tomodachi-generate = "main:main"
-tomodachi-control = "ctrl:main"
+tomodachi-webui = "tomodachi_drawing.webui:main"
+tomodachi-preview = "tomodachi_drawing.preview:main"
+tomodachi-sequence-preview = "tomodachi_drawing.sequence_preview:main"
+tomodachi-generate = "tomodachi_drawing.main:main"
+tomodachi-control = "tomodachi_drawing.ctrl:main"
 
-[tool.setuptools]
-py-modules = [
-    "ctrl",
-    "generate_color_calibration",
-    "generate_color_probe",
-    "main",
-    "main_brush",
-    "main_fast",
-    "preview",
-    "sequence_preview",
-    "tomodachi_common",
-    "webui",
-]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tomodachi_drawing"]

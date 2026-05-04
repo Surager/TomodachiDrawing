@@ -3,7 +3,7 @@ import sys
 
 import numpy as np
 
-from tomodachi_common import (
+from .tomodachi_common import (
     BRUSH_HOME,
     BRUSH_SIZES,
     COLOR_PANEL_HOME,

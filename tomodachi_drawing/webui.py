@@ -5,6 +5,7 @@ import json
 import logging
 import multiprocessing
 import os
+import shutil
 import signal
 import sys
 import threading
@@ -14,25 +15,27 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-from flask import Flask, jsonify, render_template_string, request, send_from_directory
+from flask import Flask, jsonify, render_template_string, request, send_file
 from werkzeug.exceptions import HTTPException
 from werkzeug.serving import WSGIRequestHandler
 from werkzeug.utils import secure_filename
 
-from main import generate_pixel_commands
-from main_brush import generate_commands as generate_brush_commands
-from sequence_preview import render_macro_preview
-from tomodachi_common import (
+from .main import generate_pixel_commands
+from .main_brush import generate_commands as generate_brush_commands
+from .sequence_preview import render_macro_preview
+from .tomodachi_common import (
     build_color_layers,
     color_key_to_rgb,
     dump_point_layers,
+    fmt_seconds,
     load_quantized_image,
     save_quantized_preview,
 )
 
 
-ROOT = Path(__file__).resolve().parent
-WEBUI_ROOT = ROOT / "output" / "webui"
+# Jobs and uploads stay under the repository root (`output/webui/`), not inside the installed package.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+WEBUI_ROOT = _REPO_ROOT / "output" / "webui"
 JOBS_ROOT = WEBUI_ROOT / "jobs"
 LOGGER = logging.getLogger("tomodachi_webui")
 VALID_BUTTONS = (
@@ -62,6 +65,24 @@ VALID_BUTTONS = (
 MACRO_POLL_SECONDS = 1 / 120
 MACRO_STOP_TIMEOUT_SECONDS = 1.0
 MACRO_CHUNK_SIZE = 5000
+STABILITY_MAX_PAIRS = 50_000
+
+
+def resolve_job_directory(sequence_id):
+    """Return resolved job directory path, or None if ID is unsafe or folder missing."""
+    if not sequence_id or not isinstance(sequence_id, str):
+        return None
+    if sequence_id.strip() != sequence_id:
+        return None
+    if any(sep in sequence_id for sep in ("/", "\\", os.sep)):
+        return None
+    root = JOBS_ROOT.resolve()
+    candidate = (JOBS_ROOT / sequence_id).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate if candidate.is_dir() else None
 
 
 class WerkzeugStatusPollFilter(logging.Filter):
@@ -683,6 +704,29 @@ INDEX_HTML = """
         </form>
         <p id="uploadMessage" class="muted"></p>
       </section>
+
+      <section>
+        <h2>稳定性测试序列</h2>
+        <p class="muted">生成大量 <code>DPAD_RIGHT</code> 与 <code>A</code>（按下时长 + 间隔与绘画宏相同），用于在真机上摸索最合适的间隔。生成后选中该条目，使用「绘制整图」发送到 Switch。</p>
+        <form id="stabilityForm">
+          <label for="stabilityPairsInput">循环次数（一次 = 先 RIGHT 再 A）</label>
+          <input id="stabilityPairsInput" name="pairs" type="number" step="1" min="1" max="50000" value="800" required>
+          <div class="row">
+            <div style="flex:1">
+              <label for="stabilityPressInput">按下时长</label>
+              <input id="stabilityPressInput" name="press" type="number" step="0.001" min="0.001" value="0.075">
+            </div>
+            <div style="flex:1">
+              <label for="stabilityWaitInput">间隔时长</label>
+              <input id="stabilityWaitInput" name="wait" type="number" step="0.001" min="0.001" value="0.075">
+            </div>
+          </div>
+          <div class="row" style="margin-top: 12px">
+            <button class="blue" type="submit">生成稳定性测试</button>
+          </div>
+        </form>
+        <p id="stabilityMessage" class="muted"></p>
+      </section>
     </div>
 
     <section>
@@ -697,6 +741,7 @@ INDEX_HTML = """
           <div class="row">
             <button class="primary" id="drawBtn">绘制整图</button>
             <button class="blue" id="drawLayerBtn">绘制当前颜色层</button>
+            <button class="danger" id="deleteSeqBtn" type="button">删除此序列</button>
             <button id="pauseBtn">暂停</button>
             <button class="danger" id="stopBtn">终止</button>
             <a id="macroLink" class="muted" href="#" target="_blank" rel="noreferrer">查看 macro.txt</a>
@@ -787,6 +832,8 @@ INDEX_HTML = """
         el('pauseBtn').disabled = data.draw.status !== 'running' && data.draw.status !== 'paused';
         el('pauseBtn').textContent = data.draw.status === 'paused' ? '继续' : '暂停';
         el('stopBtn').disabled = data.draw.status !== 'running' && data.draw.status !== 'paused';
+        const drawingSeq = data.draw.sequence_id;
+        el('deleteSeqBtn').disabled = !selectedId || (drawBusy && drawingSeq === selectedId);
         el('drawProgress').value = data.draw.percent || 0;
         const speed = Number(data.draw.lines_per_second || 0).toFixed(2);
         const eta = formatEta(data.draw.eta_seconds);
@@ -845,12 +892,34 @@ INDEX_HTML = """
       }
       const selectedLayer = layers.find(layer => layer.id === selectedLayerId) || null;
       el('detailTitle').textContent = item.source_name;
-      el('detailMeta').innerHTML = `
+      const b = item.benchmark;
+      const isStability = item.mode === 'stability_test';
+      let benchRow = '';
+      if (b) {
+        const benchLines = isStability
+          ? `宏写入 ${b.macro_write_seconds}s · 占位图 ${b.placeholder_images_seconds}s`
+          : `读图 ${b.ingest_seconds}s · 量化分层 ${b.quantize_seconds}s · 侧车 ${b.dump_seconds}s · 整图宏 ${b.full_macro_generate_seconds}s · 整图预览 ${b.full_preview_seconds}s · 按层 ${b.layers_loop_seconds}s（宏 ${b.layers_macro_generate_seconds}s / 写文件与层预览 ${b.layers_other_seconds}s）`;
+        benchRow = `
+        <div><span class="muted">生成总耗时</span><b>${b.total_seconds}s</b></div>
+        <div class="muted" style="font-size:0.85em; grid-column: 1 / -1; line-height:1.45;">
+          ${benchLines}
+        </div>`;
+      }
+      if (isStability) {
+        el('detailMeta').innerHTML = `
+        <div><span class="muted">模式</span><b>稳定性测试</b></div>
+        <div><span class="muted">循环次数</span><b>${item.pairs}</b></div>
+        <div><span class="muted">按下时长</span><b>${item.press}</b></div>
+        <div><span class="muted">间隔时长</span><b>${item.wait}</b></div>
+        <div><span class="muted">宏行数</span><b>${item.macro_lines}</b></div>${benchRow}`;
+      } else {
+        el('detailMeta').innerHTML = `
         <div><span class="muted">模式</span><b>${item.mode}</b></div>
         <div><span class="muted">颜色层</span><b>${item.colors}</b></div>
         <div><span class="muted">宏行数</span><b>${item.macro_lines}</b></div>
         <div><span class="muted">合并阈值</span><b>${item.merge_threshold || 0}</b></div>
-        <div><span class="muted">层后归零点</span><b>${item.return_home_per_layer ? '开启' : '关闭'}</b></div>`;
+        <div><span class="muted">层后归零点</span><b>${item.return_home_per_layer ? '开启' : '关闭'}</b></div>${benchRow}`;
+      }
       el('sourcePreview').src = item.source_url;
       el('quantizedPreview').src = item.quantized_preview_url;
       el('sequencePreview').src = item.sequence_preview_url;
@@ -936,6 +1005,20 @@ INDEX_HTML = """
       pollStatus();
     };
 
+    el('deleteSeqBtn').onclick = async () => {
+      if (!selectedId) return;
+      if (!confirm(`确定删除序列「${selectedId}」？本地文件夹将一并删除，不可恢复。`)) return;
+      try {
+        await api(`/api/sequences/${encodeURIComponent(selectedId)}`, {method: 'DELETE'});
+        selectedId = null;
+        selectedLayerId = null;
+        await loadEntries();
+      } catch (err) {
+        alert(err.message);
+      }
+      pollStatus();
+    };
+
     el('pauseBtn').onclick = async () => {
       try {
         const status = (await api('/api/status')).draw.status;
@@ -962,10 +1045,41 @@ INDEX_HTML = """
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || '生成失败');
         selectedId = data.entry.id;
-        el('uploadMessage').textContent = `已生成 ${data.entry.macro_lines} 行按键序列`;
+        const bt = data.entry.benchmark && data.entry.benchmark.total_seconds;
+        el('uploadMessage').textContent = bt != null
+          ? `已生成 ${data.entry.macro_lines} 行按键序列（总耗时 ${Number(bt).toFixed(2)}s）`
+          : `已生成 ${data.entry.macro_lines} 行按键序列`;
         await loadEntries();
       } catch (err) {
         el('uploadMessage').textContent = err.message;
+      }
+    };
+
+    el('stabilityForm').onsubmit = async event => {
+      event.preventDefault();
+      el('stabilityMessage').textContent = '正在生成…';
+      try {
+        const fd = new FormData(event.currentTarget);
+        const body = {
+          pairs: parseInt(fd.get('pairs'), 10),
+          press: parseFloat(fd.get('press')),
+          wait: parseFloat(fd.get('wait')),
+        };
+        const res = await fetch('/api/sequences/stability-test', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || '生成失败');
+        selectedId = data.entry.id;
+        const bt = data.entry.benchmark && data.entry.benchmark.total_seconds;
+        el('stabilityMessage').textContent = bt != null
+          ? `已生成 ${data.entry.macro_lines} 行（总耗时 ${Number(bt).toFixed(2)}s），可选中后「绘制整图」发送`
+          : `已生成 ${data.entry.macro_lines} 行`;
+        await loadEntries(true);
+      } catch (err) {
+        el('stabilityMessage').textContent = err.message;
       }
     };
 
@@ -999,6 +1113,89 @@ def public_entry(meta):
         "sequence_preview_url": f"/files/{job_id}/sequence_preview.png",
         "macro_url": f"/files/{job_id}/macro.txt",
     }
+
+
+def finalize_job_benchmark(segments, job_started_perf):
+    """Round segment timings and append wall-clock total (seconds, perf_counter)."""
+    total = time.perf_counter() - job_started_perf
+    out = {key: round(val, 4) for key, val in segments.items()}
+    out["total_seconds"] = round(total, 4)
+    return out
+
+
+def build_stability_test_macro_lines(pairs, press, wait):
+    """Alternating DPAD_RIGHT and A with the same timing shape as drawing macros."""
+    pt = fmt_seconds(press)
+    wt = fmt_seconds(wait)
+    unit = [f"DPAD_RIGHT {pt}", wt, f"A {pt}", wt]
+    return unit * pairs
+
+
+def create_stability_test_job(pairs, press, wait):
+    """Write a job folder with macro.txt only useful for timing experiments on hardware."""
+    if pairs < 1 or pairs > STABILITY_MAX_PAIRS:
+        raise ValueError(f"循环次数须在 1～{STABILITY_MAX_PAIRS} 之间")
+    if press <= 0 or wait <= 0:
+        raise ValueError("按下时长与间隔须为正数")
+
+    job_started_perf = time.perf_counter()
+    bench_segments = {}
+
+    job_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
+    job_dir = JOBS_ROOT / job_id
+    job_dir.mkdir(parents=True, exist_ok=False)
+
+    t0 = time.perf_counter()
+    lines = build_stability_test_macro_lines(pairs, press, wait)
+    (job_dir / "macro.txt").write_text("\n".join(lines), encoding="utf-8")
+    bench_segments["macro_write_seconds"] = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    from PIL import Image
+
+    placeholder = Image.new("RGBA", (256, 256), (248, 248, 250, 255))
+    placeholder.save(job_dir / "source.png")
+    placeholder.save(job_dir / "quantized_preview.png")
+    placeholder.save(job_dir / "sequence_preview.png")
+    bench_segments["placeholder_images_seconds"] = time.perf_counter() - t0
+
+    (job_dir / "points.json").write_text(
+        json.dumps({"size": [256, 256], "layers": []}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    macro_lines = len(lines)
+    benchmark = finalize_job_benchmark(bench_segments, job_started_perf)
+    meta = {
+        "id": job_id,
+        "source_name": "稳定性测试",
+        "created_at": now_text(),
+        "mode": "stability_test",
+        "kind": "stability_test",
+        "press": press,
+        "wait": wait,
+        "pairs": pairs,
+        "merge_threshold": 0,
+        "return_home_per_layer": False,
+        "min_gain": 1,
+        "colors": 0,
+        "macro_lines": macro_lines,
+        "layers": [],
+        "benchmark": benchmark,
+    }
+    (job_dir / "meta.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    LOGGER.info(
+        "Created stability test job %s pairs=%s macro_lines=%s press=%s wait=%s",
+        job_id,
+        pairs,
+        macro_lines,
+        press,
+        wait,
+    )
+    return public_entry(meta)
 
 
 def layer_id_from_index(index):
@@ -1048,6 +1245,9 @@ def generate_sequence(
     merge_threshold,
     return_home_per_layer,
 ):
+    job_started_perf = time.perf_counter()
+    bench_segments = {}
+
     job_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
     job_dir = JOBS_ROOT / job_id
     job_dir.mkdir(parents=True, exist_ok=False)
@@ -1055,14 +1255,19 @@ def generate_sequence(
     source_name = secure_filename(image_storage.filename) or "image.png"
     raw_source_path = job_dir / f"upload_{source_name}"
     source_path = job_dir / "source.png"
+    t0 = time.perf_counter()
     image_storage.save(raw_source_path)
 
     from PIL import Image
 
     with Image.open(raw_source_path) as image:
         image.convert("RGBA").save(source_path)
+    bench_segments["ingest_seconds"] = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
     keys, opaque = load_quantized_image(source_path, merge_threshold=merge_threshold)
     layers = build_color_layers(keys, opaque)
+    bench_segments["quantize_seconds"] = time.perf_counter() - t0
 
     quantized_preview_path = job_dir / "quantized_preview.png"
     point_dump_path = job_dir / "points.json"
@@ -1071,9 +1276,12 @@ def generate_sequence(
     layer_dir = job_dir / "layers"
     layer_dir.mkdir(parents=True, exist_ok=True)
 
+    t0 = time.perf_counter()
     save_quantized_preview(keys, opaque, quantized_preview_path)
     dump_point_layers(layers, point_dump_path)
+    bench_segments["dump_seconds"] = time.perf_counter() - t0
 
+    t0 = time.perf_counter()
     if mode == "pixel":
         commands, color_count = generate_pixel_commands(
             source_path,
@@ -1091,11 +1299,16 @@ def generate_sequence(
             merge_threshold,
             return_home_per_layer=False,
         )
+    bench_segments["full_macro_generate_seconds"] = time.perf_counter() - t0
 
+    t0 = time.perf_counter()
     macro_path.write_text("\n".join(commands), encoding="utf-8")
     render_macro_preview(macro_path, sequence_preview_path)
+    bench_segments["full_preview_seconds"] = time.perf_counter() - t0
 
     layer_entries = []
+    layers_macro_generate_seconds = 0.0
+    t_layers = time.perf_counter()
     for index, layer in enumerate(layers):
         layer_id = layer_id_from_index(index)
         h, s, v = layer.key
@@ -1105,6 +1318,7 @@ def generate_sequence(
         layer_preview_path = layer_dir / f"{stem}_preview.png"
 
         build_layer_image(layer).save(layer_source_path)
+        t_gen = time.perf_counter()
         if mode == "pixel":
             layer_commands, _ = generate_pixel_commands(
                 layer_source_path,
@@ -1122,6 +1336,7 @@ def generate_sequence(
                 merge_threshold,
                 return_home_per_layer,
             )
+        layers_macro_generate_seconds += time.perf_counter() - t_gen
         layer_macro_path.write_text("\n".join(layer_commands), encoding="utf-8")
         render_macro_preview(layer_macro_path, layer_preview_path)
         layer_entries.append(
@@ -1136,6 +1351,25 @@ def generate_sequence(
                 "preview_file": f"layers/{layer_preview_path.name}",
             }
         )
+    bench_segments["layers_loop_seconds"] = time.perf_counter() - t_layers
+    bench_segments["layers_macro_generate_seconds"] = layers_macro_generate_seconds
+    bench_segments["layers_other_seconds"] = max(
+        0.0,
+        bench_segments["layers_loop_seconds"] - layers_macro_generate_seconds,
+    )
+
+    benchmark = finalize_job_benchmark(bench_segments, job_started_perf)
+    LOGGER.info(
+        "Job %s benchmark total=%.3fs quantize=%.3fs full_macro=%.3fs "
+        "full_preview=%.3fs layers_loop=%.3fs (layers_macro=%.3fs)",
+        job_id,
+        benchmark["total_seconds"],
+        benchmark["quantize_seconds"],
+        benchmark["full_macro_generate_seconds"],
+        benchmark["full_preview_seconds"],
+        benchmark["layers_loop_seconds"],
+        benchmark["layers_macro_generate_seconds"],
+    )
 
     meta = {
         "id": job_id,
@@ -1150,6 +1384,7 @@ def generate_sequence(
         "colors": color_count,
         "macro_lines": len(commands),
         "layers": layer_entries,
+        "benchmark": benchmark,
     }
     (job_dir / "meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2),
@@ -1442,8 +1677,42 @@ def api_create_sequence():
         return jsonify({"error": str(exc)}), 400
 
 
-@app.route("/api/sequences/<sequence_id>", methods=["GET"])
+@app.route("/api/sequences/stability-test", methods=["POST"])
+def api_create_stability_sequence():
+    data = request.get_json(silent=True) or {}
+    try:
+        pairs = int(data.get("pairs", 0))
+        press = float(data.get("press", 0))
+        wait = float(data.get("wait", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "pairs / press / wait 参数无效"}), 400
+    try:
+        entry = create_stability_test_job(pairs, press, wait)
+        return jsonify({"entry": entry})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        log_exception("Failed to create stability test job", exc)
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/sequences/<sequence_id>", methods=["GET", "DELETE"])
 def api_sequence(sequence_id):
+    if request.method == "DELETE":
+        job_dir = resolve_job_directory(sequence_id)
+        if not job_dir:
+            return jsonify({"error": "找不到按键序列"}), 404
+        snap = draw_state.snapshot()
+        if draw_state.is_busy() and snap.get("sequence_id") == sequence_id:
+            return jsonify({"error": "该序列正在绘制或终止中，请先停止绘画后再删除"}), 409
+        try:
+            shutil.rmtree(job_dir)
+        except OSError as exc:
+            LOGGER.warning("Failed to delete job %s: %s", sequence_id, exc)
+            return jsonify({"error": str(exc)}), 500
+        LOGGER.info("Deleted job directory %s", sequence_id)
+        return jsonify({"ok": True})
+
     entry = find_entry(sequence_id)
     if not entry:
         return jsonify({"error": "找不到按键序列"}), 404
@@ -1532,10 +1801,17 @@ def api_draw_stop():
 
 @app.route("/files/<sequence_id>/<path:filename>", methods=["GET"])
 def files(sequence_id, filename):
-    if not find_entry(sequence_id):
+    job_dir = resolve_job_directory(sequence_id)
+    if not job_dir:
         return jsonify({"error": "找不到文件"}), 404
-    job_dir = JOBS_ROOT / sequence_id
-    return send_from_directory(job_dir, filename)
+    target = (job_dir / filename).resolve()
+    try:
+        target.relative_to(job_dir.resolve())
+    except ValueError:
+        return jsonify({"error": "找不到文件"}), 404
+    if not target.is_file():
+        return jsonify({"error": "找不到文件"}), 404
+    return send_file(target)
 
 
 def parse_args():

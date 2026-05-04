@@ -1,7 +1,7 @@
 import argparse
 import sys
 
-from tomodachi_common import (
+from .tomodachi_common import (
     build_color_layers,
     dump_point_layers,
     load_quantized_image,
