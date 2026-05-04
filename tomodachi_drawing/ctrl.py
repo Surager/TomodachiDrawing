@@ -9,12 +9,13 @@ def parse_args():
 
 def main():
     args = parse_args()
-    with open(args.macro, "r", encoding="utf-8") as handle:
-        cmd = handle.read().splitlines()
-
     from tqdm import tqdm
 
     from .nxbt_path import import_nxbt
+    from .tomodachi_common import flatten_macro_lines
+
+    with open(args.macro, "r", encoding="utf-8") as handle:
+        cmd = flatten_macro_lines(handle.read().splitlines())
 
     nxbt = import_nxbt()
     nx = nxbt.Nxbt()

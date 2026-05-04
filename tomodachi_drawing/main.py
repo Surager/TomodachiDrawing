@@ -7,6 +7,7 @@ from .main_brush import generate_commands as generate_brush_commands
 from .tomodachi_common import (
     COLOR_PANEL_HOME,
     build_color_layers,
+    collapse_macro_loop_blocks,
     emit_canvas_move,
     emit_color_switch,
     fmt_seconds,
@@ -107,7 +108,7 @@ def generate_pixel_commands(image, press, wait, merge_threshold=0, return_home_p
                 wait_text,
             )
 
-    return commands, len(layers)
+    return collapse_macro_loop_blocks(commands), len(layers)
 
 
 def main():

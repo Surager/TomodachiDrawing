@@ -297,6 +297,91 @@ def dump_point_layers(layers, output_path):
     Path(output_path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+# nxbt LOOP expansion (aligned with third_party/nxbt InputParser.parse_loops).
+MIN_MACRO_LOOP_REPEATS = 5
+MAX_MACRO_LOOP_BLOCK_LINES = 128
+
+
+def _nxbt_parse_loops(macro):
+    """Expand LOOP blocks to a flat list of lines (nxbt-compatible)."""
+    parsed = []
+    i = 0
+    n = len(macro)
+    while i < n:
+        line = macro[i]
+        if line.startswith("LOOP"):
+            parts = line.split(" ", 1)
+            if len(parts) < 2:
+                raise ValueError(f"Invalid LOOP line: {line!r}")
+            loop_count = int(parts[1])
+            if i + 1 >= n:
+                raise ValueError("LOOP has no body")
+            nxt = macro[i + 1]
+            if nxt.startswith("\t"):
+                loop_delimiter = "\t"
+            elif nxt.startswith("    "):
+                loop_delimiter = "    "
+            else:
+                loop_delimiter = "  "
+            j = i + 1
+            loop_buffer = []
+            while j < n and macro[j].startswith(loop_delimiter):
+                loop_buffer.append(macro[j].replace(loop_delimiter, "", 1))
+                j += 1
+            i = j - 1
+            if any(s.startswith("LOOP") for s in loop_buffer):
+                loop_buffer = _nxbt_parse_loops(loop_buffer)
+            parsed.extend(loop_buffer * loop_count)
+        else:
+            parsed.append(line)
+        i += 1
+    return parsed
+
+
+def flatten_macro_lines(raw_lines):
+    """Remove blanks and # comments, expand LOOP… blocks for execution or preview."""
+    filtered = [
+        s for s in raw_lines if s.strip() != "" and not s.strip().startswith("#")
+    ]
+    if not filtered:
+        return []
+    return _nxbt_parse_loops(filtered)
+
+
+def collapse_macro_loop_blocks(commands, min_repeats=MIN_MACRO_LOOP_REPEATS):
+    """Turn >= min_repeats consecutive copies of the same line block into nxbt LOOP syntax."""
+    if not commands or len(commands) < min_repeats:
+        return list(commands)
+    n = len(commands)
+    out = []
+    i = 0
+    while i < n:
+        best_len = 0
+        best_count = 0
+        max_block = min(MAX_MACRO_LOOP_BLOCK_LINES, n - i)
+        for block_len in range(max_block, 0, -1):
+            block = commands[i : i + block_len]
+            j = i + block_len
+            count = 1
+            while j + block_len <= n and commands[j : j + block_len] == block:
+                count += 1
+                j += block_len
+            if count >= min_repeats:
+                best_len = block_len
+                best_count = count
+                break
+        if best_len:
+            block = commands[i : i + best_len]
+            out.append(f"LOOP {best_count}")
+            for bline in block:
+                out.append("\t" + bline)
+            i += best_len * best_count
+        else:
+            out.append(commands[i])
+            i += 1
+    return out
+
+
 def emit_button(commands, button, press_text, wait_text, include_wait=True):
     commands.append(f"{button} {press_text}")
     if include_wait:

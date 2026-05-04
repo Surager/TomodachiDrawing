@@ -10,6 +10,7 @@ from .tomodachi_common import (
     build_color_layers,
     center_windows,
     centers_that_fit,
+    collapse_macro_loop_blocks,
     emit_brush_switch,
     emit_canvas_move,
     emit_color_switch,
@@ -215,7 +216,7 @@ def generate_commands(image, press, wait, min_gain, merge_threshold=0, return_ho
                 wait_text,
             )
 
-    return commands, len(layers)
+    return collapse_macro_loop_blocks(commands), len(layers)
 
 
 def main():

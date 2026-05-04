@@ -16,6 +16,7 @@ from .tomodachi_common import (
     SAT_STEPS,
     VAL_STEPS,
     color_key_to_rgb,
+    flatten_macro_lines,
     normalize_color_after_selection,
 )
 
@@ -53,7 +54,7 @@ def _parse_macro_lines(macro):
         text = "\n".join(macro)
 
     lines = []
-    for raw_line in text.splitlines():
+    for raw_line in flatten_macro_lines(text.splitlines()):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue

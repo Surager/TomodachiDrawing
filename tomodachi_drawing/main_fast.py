@@ -9,6 +9,7 @@ from .tomodachi_common import (
     build_column_path,
     build_component_path,
     build_row_path,
+    collapse_macro_loop_blocks,
     emit_canvas_move,
     emit_color_switch,
     fmt_seconds,
@@ -104,6 +105,7 @@ def main():
             )
             commands.append(f"A {press_text}")
 
+    commands = collapse_macro_loop_blocks(commands)
     print(
         f"[main_fast] colors={len(layers)} macro_lines={len(commands)}",
         file=sys.stderr,
