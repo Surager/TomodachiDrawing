@@ -1,6 +1,5 @@
 import argparse
 import atexit
-import importlib
 import json
 import logging
 import multiprocessing
@@ -22,6 +21,7 @@ from werkzeug.utils import secure_filename
 
 from .main import generate_pixel_commands
 from .main_brush import generate_commands as generate_brush_commands
+from .nxbt_path import import_nxbt
 from .sequence_preview import render_macro_preview
 from .tomodachi_common import (
     build_color_layers,
@@ -134,20 +134,6 @@ def now_text():
 
 def log_exception(context, exc):
     LOGGER.exception("%s: %s", context, exc)
-
-
-def import_nxbt():
-    try:
-        return importlib.import_module("nxbt")
-    except ModuleNotFoundError:
-        for candidate in (os.environ.get("NXBT_SOURCE_DIR"), r"D:\aaWorkspace\git\github\nxbt"):
-            if not candidate:
-                continue
-            source_dir = Path(candidate)
-            if source_dir.exists():
-                sys.path.insert(0, str(source_dir))
-                return importlib.import_module("nxbt")
-        raise
 
 
 class ControllerService:

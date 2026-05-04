@@ -1,0 +1,13 @@
+Third-party software notices
+==============================
+
+nxbt (modified)
+---------------
+
+This project includes modified code from **Brikwerk/nxbt**, licensed under the **MIT License**.
+
+- Original project: https://github.com/Brikwerk/nxbt  
+- Vendored copy: `third_party/nxbt/` (see that directory’s `LICENSE` for the full MIT license text)  
+- Summary of local changes: `third_party/nxbt/PATCHES.md`
+
+The MIT License requires retaining the original copyright and license text; those remain in `third_party/nxbt/LICENSE` alongside the upstream `README.md` where applicable.

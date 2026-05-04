@@ -4,13 +4,15 @@ Tomodachi Life drawing macro generator.
 
 **Chinese README:** [README_zh.md](README_zh.md)
 
+**Third-party:** This project includes modified code from [Brikwerk/nxbt](https://github.com/Brikwerk/nxbt), licensed under the MIT License. See [NOTICE](NOTICE) and [`third_party/nxbt/`](third_party/nxbt/) (including `LICENSE`, `PATCHES.md`).
+
 ## Abstract
 
 This repository implements tooling for converting raster artwork into timed controller macros compatible with *Tomodachi Life*’s drawing interface. The pipeline performs color quantization to the in-game palette, optional brush-aware path generation, and replay via Bluetooth-emulated Nintendo Switch controllers. **No dedicated peripheral hardware is required beyond a general-purpose computer equipped with a Bluetooth radio.** Host-side execution commonly relies on Linux userspace stacks that expose a virtual Pro Controller (for example via `nxbt`); on Windows or macOS, comparable connectivity is routinely achieved by running such software inside a Linux virtual machine and forwarding the host Bluetooth adapter into the guest—e.g. with USB/IP (`usbip`)—so that the adapter appears as a USB device to the VM and can pair as the Switch expects.
 
 ## Repository structure
 
-Python sources live in the **`tomodachi_drawing/`** package; the repository root keeps licensing, dependency metadata, and READMEs only.
+Python sources live in the **`tomodachi_drawing/`** package; the repository root keeps licensing (`LICENSE`, `NOTICE`), dependency metadata, and READMEs.
 
 | Module | Role |
 |--------|------|
@@ -25,6 +27,8 @@ Python sources live in the **`tomodachi_drawing/`** package; the repository root
 | `tomodachi_drawing/generate_color_*.py` | Optional calibration / color-probe image generators |
 
 Runtime output (Web UI jobs, previews) still defaults to **`output/`** at the **repository root** (next to `tomodachi_drawing/`), not inside the package directory.
+
+A **modified, vendored nxbt** lives under **`third_party/nxbt/`** (Python package `nxbt/`, upstream `LICENSE`, local change log in `PATCHES.md`). Runtime loading is handled by `tomodachi_drawing.nxbt_path`; override with env var **`NXBT_SOURCE_DIR`** if needed.
 
 ## Modeling assumptions
 
@@ -82,7 +86,7 @@ uv run tomodachi-control macro.txt
 ## Remarks
 
 - `tomodachi_drawing.main` defaults to pixel mode.
-- `tomodachi_drawing.ctrl` depends on `nxbt` and `tqdm`.
+- `tomodachi_drawing.ctrl` depends on the vendored `nxbt` (see `NOTICE`) and `tqdm`.
 - For throughput-oriented generation where strict per-pixel fidelity is secondary, brush mode (`--mode brush`, implemented in `main_brush`) is the recommended entrypoint.
 
 ## Limitations

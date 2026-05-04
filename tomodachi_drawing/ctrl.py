@@ -12,9 +12,11 @@ def main():
     with open(args.macro, "r", encoding="utf-8") as handle:
         cmd = handle.read().splitlines()
 
-    import nxbt
     from tqdm import tqdm
 
+    from .nxbt_path import import_nxbt
+
+    nxbt = import_nxbt()
     nx = nxbt.Nxbt()
     procon = nx.create_controller(nxbt.PRO_CONTROLLER)
     print("Waiting for console connection...")

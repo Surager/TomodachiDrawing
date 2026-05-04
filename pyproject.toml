@@ -8,16 +8,16 @@ version = "0.1.0"
 description = "Tomodachi Life drawing macro generator and Web UI."
 readme = "README.md"
 license = "PolyForm-Noncommercial-1.0.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.10,<3.14"
 dependencies = [
     "click<8",
+    "dbus-python>=1.2.16",
     "Flask==1.1.2",
     "itsdangerous<2",
     "Jinja2<3",
     "MarkupSafe<2.1",
     "numpy",
-    "nxbt==0.1.4",
     "Pillow",
     "tqdm",
     "Werkzeug<2",
