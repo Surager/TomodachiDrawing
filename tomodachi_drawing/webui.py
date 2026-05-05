@@ -25,8 +25,10 @@ from .nxbt_path import import_nxbt
 from .sequence_preview import render_macro_preview
 from .tomodachi_common import (
     build_color_layers,
+    collapse_macro_loop_blocks,
     color_key_to_rgb,
     dump_point_layers,
+    flatten_macro_lines,
     fmt_seconds,
     load_quantized_image,
     save_quantized_preview,
@@ -66,6 +68,29 @@ MACRO_POLL_SECONDS = 1 / 120
 MACRO_STOP_TIMEOUT_SECONDS = 1.0
 MACRO_CHUNK_SIZE = 5000
 STABILITY_MAX_PAIRS = 50_000
+
+
+def macro_line_holds_physical_input(line):
+    """True if a flattened macro line drives buttons or sticks (not wait-only / comment)."""
+    s = line.strip()
+    if not s or s.startswith("#"):
+        return False
+    first = s.split()[0]
+    if first in VALID_BUTTONS:
+        return True
+    if first.startswith("L_STICK@") or first.startswith("R_STICK@"):
+        return True
+    return False
+
+
+def chunk_slice_end(lines, chunk_start, hard_end):
+    """Shrink hard_end so the last line is not input-holding when possible (nxbt chunk gap safety)."""
+    chunk_end = hard_end
+    while chunk_end > chunk_start and macro_line_holds_physical_input(lines[chunk_end - 1]):
+        chunk_end -= 1
+    if chunk_end == chunk_start:
+        chunk_end = min(chunk_start + 1, hard_end)
+    return chunk_end
 
 
 def resolve_job_directory(sequence_id):
@@ -1132,7 +1157,7 @@ def create_stability_test_job(pairs, press, wait):
     job_dir.mkdir(parents=True, exist_ok=False)
 
     t0 = time.perf_counter()
-    lines = build_stability_test_macro_lines(pairs, press, wait)
+    lines = collapse_macro_loop_blocks(build_stability_test_macro_lines(pairs, press, wait))
     (job_dir / "macro.txt").write_text("\n".join(lines), encoding="utf-8")
     bench_segments["macro_write_seconds"] = time.perf_counter() - t0
 
@@ -1452,7 +1477,7 @@ def draw_worker(sequence_id, macro_file="macro.txt", start_message="正在发送
         return
 
     macro_path = JOBS_ROOT / sequence_id / macro_file
-    lines = macro_path.read_text(encoding="utf-8").splitlines()
+    lines = flatten_macro_lines(macro_path.read_text(encoding="utf-8").splitlines())
     total = len(lines)
     started_monotonic = time.monotonic()
     draw_state.update(
@@ -1473,18 +1498,21 @@ def draw_worker(sequence_id, macro_file="macro.txt", start_message="正在发送
     try:
         nx, controller_index = controller.require_connected()
         with controller.macro_lock:
-            for chunk_start in range(0, total, MACRO_CHUNK_SIZE):
+            chunk_start = 0
+            while chunk_start < total:
                 if draw_state.wait_while_paused():
                     draw_state.update(message=start_message)
                 if draw_state.is_cancel_requested():
                     break
 
-                chunk_end = min(chunk_start + MACRO_CHUNK_SIZE, total)
+                hard_end = min(chunk_start + MACRO_CHUNK_SIZE, total)
+                chunk_end = chunk_slice_end(lines, chunk_start, hard_end)
                 chunk_lines = lines[chunk_start:chunk_end]
                 chunk_text = "\n".join(chunk_lines)
 
                 if not chunk_text.strip():
                     update_draw_progress(started_monotonic, chunk_end, total)
+                    chunk_start = chunk_end
                     continue
 
                 result = run_macro_chunk_until_done_or_interrupted(nx, controller_index, chunk_text)
@@ -1495,6 +1523,7 @@ def draw_worker(sequence_id, macro_file="macro.txt", start_message="正在发送
                         total,
                         message=f"正在发送第 {chunk_end}/{total} 行",
                     )
+                    chunk_start = chunk_end
                     continue
 
                 update_draw_progress(
@@ -1507,6 +1536,7 @@ def draw_worker(sequence_id, macro_file="macro.txt", start_message="正在发送
                         else f"已暂停在第 {chunk_end}/{total} 行附近，后续按键未发送"
                     ),
                 )
+                chunk_start = chunk_end
                 if result == "cancelled":
                     break
                 draw_state.wait_while_paused()

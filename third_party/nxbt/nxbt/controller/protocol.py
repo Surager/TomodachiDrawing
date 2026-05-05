@@ -278,18 +278,21 @@ class ControllerProtocol():
 
     def set_button_inputs(self, upper, shared, lower):
 
+        self.button_status = [upper, shared, lower]
         self.report[4] = upper
         self.report[5] = shared
         self.report[6] = lower
 
     def set_left_stick_inputs(self, left):
 
+        self.left_stick_centre = list(left)
         self.report[7] = left[0]
         self.report[8] = left[1]
         self.report[9] = left[2]
 
     def set_right_stick_inputs(self, right):
 
+        self.right_stick_centre = list(right)
         self.report[10] = right[0]
         self.report[11] = right[1]
         self.report[12] = right[2]

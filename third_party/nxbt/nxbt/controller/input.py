@@ -208,11 +208,20 @@ class InputParser():
             time_delta = perf_counter() - self.macro_timer_start
             if time_delta > self.macro_timer_length:
                 self.current_macro_commands = None
+                # Immediately assert neutral so that the last button of
+                # this line is never carried over into the next line or
+                # the between-chunk gap.
+                self._set_neutral()
                 # Check if we're done the current macro
                 if not self.current_macro and state:
                     finished = state["finished_macros"]
                     finished.append(self.current_macro_id)
                     state["finished_macros"] = finished
+
+        else:
+            # No macro, no direct input: keep asserting neutral to prevent
+            # stale button_status from being re-sent by set_standard_input_report.
+            self._set_neutral()
 
     def parse_controller_input(self, controller_input):
 
@@ -357,8 +366,13 @@ class InputParser():
 
     def set_macro_input(self, macro_input):
 
-        # Checking if this is a wait macro command
+        # A wait-only line (e.g. ["0.075s"]) has no button tokens.
+        # We must still actively drive all buttons/sticks to neutral so that
+        # the protocol report does not keep re-asserting the previous state.
         if len(macro_input) < 2:
+            self.protocol.set_button_inputs(0, 0, 0)
+            self.protocol.set_left_stick_inputs(self.stick_ratio_to_calibrated_position(0, 0, "L_STICK"))
+            self.protocol.set_right_stick_inputs(self.stick_ratio_to_calibrated_position(0, 0, "R_STICK"))
             return
 
         # Check if the Grip/Order menu would be closed
@@ -507,3 +521,11 @@ class InputParser():
     def reassign_protocol(self, protocol):
 
         self.protocol = protocol
+
+    def _set_neutral(self):
+        """Drive all buttons and sticks to neutral/center."""
+        self.protocol.set_button_inputs(0, 0, 0)
+        self.protocol.set_left_stick_inputs(
+            self.stick_ratio_to_calibrated_position(0, 0, "L_STICK"))
+        self.protocol.set_right_stick_inputs(
+            self.stick_ratio_to_calibrated_position(0, 0, "R_STICK"))

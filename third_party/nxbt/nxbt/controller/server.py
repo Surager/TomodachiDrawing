@@ -118,10 +118,8 @@ class ControllerServer():
 
     def mainloop(self, itr, ctrl):
 
-        duration_start = time.perf_counter()
+        next_tick_time = time.perf_counter()
         while True:
-            # Start timing command processing
-            timer_start = time.perf_counter()
 
             # Attempt to get output from Switch
             try:
@@ -191,20 +189,22 @@ class ControllerServer():
                 # Attempt to reconnect to the Switch
                 itr, ctrl = self.save_connection(e)
 
-            # Figure out how long it took to process commands
-            duration_end = time.perf_counter()
-            duration_elapsed = duration_end - duration_start
-            duration_start = duration_end
-            
-            sleep_time = 1/132 - duration_elapsed
-            if sleep_time >= 0:
-                time.sleep(sleep_time)
+            # Absolute-time metronome: sleep until next scheduled tick.
+            # This avoids the alternating fast/slow frame issue of relative
+            # elapsed-time calculations that included the previous sleep.
             self.tick += 1
+            next_tick_time += 1/132
+            now = time.perf_counter()
+            sleep_time = next_tick_time - now
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+            elif sleep_time < -0.5:
+                next_tick_time = now
 
             if self.logger_level <= logging.DEBUG:
-                self.times.append(duration_elapsed)
+                self.times.append(time.perf_counter() - now)
                 if len(self.times) > 100:
-                    self.times.pop()
+                    self.times.pop(0)
                 mean_time = stat.mean(self.times)
 
                 self.logger.debug(
