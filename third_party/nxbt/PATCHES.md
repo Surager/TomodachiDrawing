@@ -42,3 +42,22 @@ Main changes:
   report, preventing phantom directional holds on line transitions.
 - Fix debug `self.times` array: `pop(0)` instead of `pop()` so the
   sliding window drops the oldest sample, not the newest.
+- Add silent BlueZ pairing agent (`nxbt/agent.py`, ported from
+  hannahbee91/nuxbt v1.1.2 "Introduced a bluez agent to silently
+  accept pairing requests on the host"). Without an agent, BlueZ may
+  show a system "Confirm Pairing" popup the first time a Switch tries
+  to pair with the emulated controller; if the popup is not answered
+  the connection eventually times out, which was the dominant cause
+  of "controller never connects" / flaky first-time connection
+  reports. `Nxbt.__init__` now spawns a daemonised `multiprocessing
+  .Process` running `run_agent_loop`, which registers a tiny D-Bus
+  object on `org.bluez.AgentManager1` that auto-accepts every pairing
+  request, then drives a `GLib.MainLoop`. `_on_exit` terminates the
+  agent process. Imports of `gi.repository.GLib` and `dbus.service`
+  are deferred and wrapped in `try/except ImportError`, so the agent
+  becomes a soft dependency: when PyGObject is not installed
+  `run_agent_loop` logs a warning and exits cleanly, leaving the
+  parent `Nxbt` instance unaffected. Agent is registered at the
+  rebranded path `/org/bluez/nxbt_agent` (instead of nuxbt's
+  `/org/bluez/nuxbt_agent`) so it does not clash with an
+  independently-installed nuxbt on the same host.

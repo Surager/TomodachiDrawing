@@ -17,6 +17,7 @@ from .bluez import replace_mac_addresses
 from .bluez import find_devices_by_alias
 from .bluez import SERVICE_NAME, ADAPTER_INTERFACE
 from .logging import create_logger
+from .agent import run_agent_loop
 
 
 JOYCON_L = ControllerTypes.JOYCON_L
@@ -193,6 +194,21 @@ class Nxbt():
         self.controllers.daemon = False
         self.controllers.start()
 
+        # Starting the BlueZ pairing agent process. This auto-accepts
+        # any pairing request from the Switch so the host does not
+        # surface a "Confirm Pairing" popup that would otherwise block
+        # the first-time connection. The subprocess gracefully no-ops
+        # if PyGObject / dbus is not available, so adding it here is
+        # safe even when silent-pairing support cannot be enabled.
+        try:
+            self.agent_process = Process(target=run_agent_loop)
+            self.agent_process.daemon = True
+            self.agent_process.start()
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning(
+                "Could not start BlueZ pairing agent process: %s", exc)
+            self.agent_process = None
+
     def _on_exit(self):
         """The exit handler function used with the atexit module.
         This function attempts to gracefully exit by terminating
@@ -204,6 +220,17 @@ class Nxbt():
         # since it isn't daemonized.
         if hasattr(self, "controllers") and self.controllers.is_alive():
             self.controllers.terminate()
+
+        # Stop the BlueZ pairing agent. It is daemonised so the OS
+        # would clean it up anyway, but terminating it explicitly
+        # makes shutdown deterministic and unregisters the agent
+        # promptly via the GLib loop's KeyboardInterrupt path.
+        agent_process = getattr(self, "agent_process", None)
+        if agent_process is not None and agent_process.is_alive():
+            try:
+                agent_process.terminate()
+            except Exception:
+                pass
 
         self.resource_manager.shutdown()
 
