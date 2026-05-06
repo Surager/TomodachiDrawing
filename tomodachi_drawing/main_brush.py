@@ -135,7 +135,7 @@ def build_pixel_fill_plan(mask, covered, start):
     return nearest_path if nearest_distance < row_distance else row_path
 
 
-def generate_commands(image, press, wait, min_gain, merge_threshold=0, return_home_per_layer=False):
+def generate_commands(image, press, wait, min_gain, merge_threshold=0, return_home_per_layer=False, start_layer_index=0):
     keys, opaque = load_quantized_image(image, merge_threshold=merge_threshold)
     layers = build_color_layers(keys, opaque)
     press_text = fmt_seconds(press)
@@ -146,7 +146,8 @@ def generate_commands(image, press, wait, min_gain, merge_threshold=0, return_ho
     current_pos = (0, 0)
     current_brush = BRUSH_HOME
 
-    for layer in layers:
+    selected_layers = layers[max(0, int(start_layer_index)):]
+    for layer in selected_layers:
         if not np.any(layer.mask):
             continue
 
@@ -216,7 +217,7 @@ def generate_commands(image, press, wait, min_gain, merge_threshold=0, return_ho
                 wait_text,
             )
 
-    return collapse_macro_loop_blocks(commands), len(layers)
+    return collapse_macro_loop_blocks(commands), len(selected_layers)
 
 
 def main():

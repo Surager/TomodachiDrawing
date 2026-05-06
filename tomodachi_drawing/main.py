@@ -59,7 +59,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def generate_pixel_commands(image, press, wait, merge_threshold=0, return_home_per_layer=False):
+def generate_pixel_commands(image, press, wait, merge_threshold=0, return_home_per_layer=False, start_layer_index=0):
     keys, opaque = load_quantized_image(image, merge_threshold=merge_threshold)
     layers = build_color_layers(keys, opaque)
     press_text = fmt_seconds(press)
@@ -69,7 +69,8 @@ def generate_pixel_commands(image, press, wait, merge_threshold=0, return_home_p
     current_color = COLOR_PANEL_HOME
     current_pos = (0, 0)
 
-    for layer in layers:
+    selected_layers = layers[max(0, int(start_layer_index)):]
+    for layer in selected_layers:
         if not np.any(layer.mask):
             continue
 
@@ -108,7 +109,7 @@ def generate_pixel_commands(image, press, wait, merge_threshold=0, return_home_p
                 wait_text,
             )
 
-    return collapse_macro_loop_blocks(commands), len(layers)
+    return collapse_macro_loop_blocks(commands), len(selected_layers)
 
 
 def main():

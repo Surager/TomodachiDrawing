@@ -752,6 +752,7 @@ INDEX_HTML = """
           <div class="row">
             <button class="primary" id="drawBtn">绘制整图</button>
             <button class="blue" id="drawLayerBtn">绘制当前颜色层</button>
+            <button class="blue" id="drawFromLayerBtn">从当前颜色层开始绘制</button>
             <button class="danger" id="deleteSeqBtn" type="button">删除此序列</button>
             <button id="pauseBtn">暂停</button>
             <button class="danger" id="stopBtn">终止</button>
@@ -840,6 +841,9 @@ INDEX_HTML = """
         el('lrBtn').disabled = c.status !== 'connected' || drawBusy;
         el('drawBtn').disabled = !selectedId || c.status !== 'connected' || drawBusy;
         el('drawLayerBtn').disabled = !selectedId || !hasLayer || c.status !== 'connected' || drawBusy;
+        const item2 = entries.find(entry => entry.id === selectedId);
+        const layerIdx = item2 && item2.layers ? item2.layers.findIndex(layer => layer.id === selectedLayerId) : -1;
+        el('drawFromLayerBtn').disabled = !selectedId || !hasLayer || layerIdx <= 0 || c.status !== 'connected' || drawBusy;
         el('pauseBtn').disabled = data.draw.status !== 'running' && data.draw.status !== 'paused';
         el('pauseBtn').textContent = data.draw.status === 'paused' ? '继续' : '暂停';
         el('stopBtn').disabled = data.draw.status !== 'running' && data.draw.status !== 'paused';
@@ -1012,6 +1016,19 @@ INDEX_HTML = """
     el('drawLayerBtn').onclick = async () => {
       if (!selectedId || !selectedLayerId) return;
       try { await api(`/api/draw/${selectedId}/layer/${selectedLayerId}`, {method: 'POST'}); }
+      catch (err) { alert(err.message); }
+      pollStatus();
+    };
+
+    el('drawFromLayerBtn').onclick = async () => {
+      if (!selectedId || !selectedLayerId) return;
+      const item = entries.find(entry => entry.id === selectedId);
+      const layers = (item && item.layers) || [];
+      const idx = layers.findIndex(layer => layer.id === selectedLayerId);
+      if (idx <= 0) return;
+      const remaining = layers.length - idx;
+      if (!confirm(`将从颜色层 ${selectedLayerId} 开始绘制至最后（共 ${remaining} 层）。\n首次发起需要重新生成宏，可能耗时几秒到十几秒。继续？`)) return;
+      try { await api(`/api/draw/${selectedId}/from-layer/${selectedLayerId}`, {method: 'POST'}); }
       catch (err) { alert(err.message); }
       pollStatus();
     };
@@ -1465,6 +1482,78 @@ def find_layer(entry, layer_id):
     return None
 
 
+def find_layer_index(entry, layer_id):
+    for layer in entry.get("layers", []):
+        if layer.get("id") == layer_id:
+            idx = layer.get("index")
+            return int(idx) if idx is not None else None
+    return None
+
+
+def partial_macro_filename(layer_id):
+    return f"macro_from_{layer_id}.txt"
+
+
+def ensure_partial_macro(sequence_id, layer_id):
+    """Generate (and cache) a macro that draws from `layer_id` to the last layer.
+
+    Re-uses the same generator the original job used so that the colour /
+    brush / canvas state is reset to home at the start, identical to picking
+    up a fresh job whose first layer happens to be `layer_id`.
+    """
+    job_dir = resolve_job_directory(sequence_id)
+    if not job_dir:
+        raise FileNotFoundError("找不到按键序列")
+
+    entry = find_entry(sequence_id)
+    if not entry:
+        raise FileNotFoundError("找不到按键序列")
+
+    layer_index = find_layer_index(entry, layer_id)
+    if layer_index is None:
+        raise ValueError("找不到颜色层")
+    if layer_index <= 0:
+        raise ValueError("第一层等价于绘制整图，请改用「绘制整图」")
+
+    out_path = job_dir / partial_macro_filename(layer_id)
+    if out_path.is_file():
+        return out_path, len(out_path.read_text(encoding="utf-8").splitlines()), True
+
+    source_path = job_dir / "source.png"
+    if not source_path.is_file():
+        raise FileNotFoundError("缺少 source.png，无法重新生成")
+
+    mode = entry.get("mode", "brush")
+    press = float(entry.get("press", 0.075))
+    wait = float(entry.get("wait", 0.075))
+    min_gain = int(entry.get("min_gain", 1) or 1)
+    merge_threshold = float(entry.get("merge_threshold", 0.0) or 0.0)
+    return_home_per_layer = bool(entry.get("return_home_per_layer", False))
+
+    if mode == "pixel":
+        commands, _ = generate_pixel_commands(
+            source_path,
+            press,
+            wait,
+            merge_threshold,
+            return_home_per_layer=return_home_per_layer,
+            start_layer_index=layer_index,
+        )
+    else:
+        commands, _ = generate_brush_commands(
+            source_path,
+            press,
+            wait,
+            min_gain,
+            merge_threshold,
+            return_home_per_layer=return_home_per_layer,
+            start_layer_index=layer_index,
+        )
+
+    out_path.write_text("\n".join(commands), encoding="utf-8")
+    return out_path, len(commands), False
+
+
 def draw_worker(sequence_id, macro_file="macro.txt", start_message="正在发送绘画按键序列"):
     entry = find_entry(sequence_id)
     if not entry:
@@ -1757,6 +1846,44 @@ def api_draw(sequence_id):
     thread = threading.Thread(
         target=draw_worker,
         args=(sequence_id, "macro.txt", "正在发送整图绘画按键序列"),
+        daemon=True,
+    )
+    thread.start()
+    return jsonify({"draw": draw_state.snapshot()})
+
+
+@app.route("/api/draw/<sequence_id>/from-layer/<layer_id>", methods=["POST"])
+def api_draw_from_layer(sequence_id, layer_id):
+    if draw_state.is_busy():
+        return jsonify({"error": "已有绘画任务正在进行"}), 409
+    entry = find_entry(sequence_id)
+    if not entry:
+        return jsonify({"error": "找不到按键序列"}), 404
+    layer = find_layer(entry, layer_id)
+    if not layer:
+        return jsonify({"error": "找不到颜色层"}), 404
+    try:
+        controller.require_connected()
+    except Exception as exc:
+        log_exception("Cannot start partial drawing because controller is not ready", exc)
+        return jsonify({"error": str(exc)}), 400
+    try:
+        macro_path, _line_count, _was_cached = ensure_partial_macro(sequence_id, layer_id)
+    except (FileNotFoundError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        log_exception("Failed to generate partial macro", exc)
+        return jsonify({"error": str(exc)}), 500
+    color = layer.get("color") or []
+    if len(color) == 3:
+        message = (
+            f"正在从颜色层 {layer_id} (H{color[0]} S{color[1]} V{color[2]}) 起绘制至最后"
+        )
+    else:
+        message = f"正在从颜色层 {layer_id} 起绘制至最后"
+    thread = threading.Thread(
+        target=draw_worker,
+        args=(sequence_id, macro_path.name, message),
         daemon=True,
     )
     thread.start()
