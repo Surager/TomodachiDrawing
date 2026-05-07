@@ -92,6 +92,7 @@ def generate_pixel_commands(image, press, wait, merge_threshold=0, return_home_p
                 wait_text,
             )
             commands.append(f"A {press_text}")
+            commands.append(wait_text)
 
         if return_home_per_layer:
             current_pos = emit_canvas_move(

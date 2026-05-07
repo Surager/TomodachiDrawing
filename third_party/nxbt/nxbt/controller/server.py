@@ -124,7 +124,14 @@ class ControllerServer():
             # Attempt to get output from Switch
             try:
                 reply = itr.recv(50)
-                if len(reply) > 40:
+                # Gate the hex-encoding format call behind the cached level
+                # check so that production runs at INFO/WARNING never pay for
+                # the byte-to-string formatting on every Switch reply (which
+                # arrive frequently during subcommand handshakes and would
+                # otherwise occasionally stretch a single tick past 7.6ms,
+                # skewing the 132Hz metronome and the release-window timing).
+                if (self.logger_level <= logging.DEBUG
+                        and reply is not None and len(reply) > 40):
                     self.logger.debug(format_msg_switch(reply))
             except BlockingIOError:
                 reply = None

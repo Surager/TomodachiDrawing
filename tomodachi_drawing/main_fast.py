@@ -104,6 +104,7 @@ def main():
                 wait_text,
             )
             commands.append(f"A {press_text}")
+            commands.append(wait_text)
 
     commands = collapse_macro_loop_blocks(commands)
     print(

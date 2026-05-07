@@ -40,6 +40,26 @@ Main changes:
   loading the next line): eliminates a 1-tick window where the old
   button state could leak into the next command or the between-line
   report, preventing phantom directional holds on line transitions.
+- Enforce a minimum inter-line neutral hold after every "active" macro
+  line (one that held a button or tilted a stick), controlled by
+  `InputParser.MIN_INTER_LINE_NEUTRAL_TICKS` (default 4 ticks ≈ 30 ms ≈
+  2 game frames at 60 fps). Without this guard, the only release
+  window between two adjacent button-pressing macro lines was the
+  single end-of-line neutral tick (~7.6 ms), which is well below the
+  16-33 ms edge-detection window of typical Switch/3DS-port games and
+  caused "swallowed" buttons during automated drawing (e.g. an A press
+  followed by a DPAD step merging into a single held event). The
+  counter is only armed when the just-finished line was active, so
+  well-formed macros (whose wait lines were already neutral) only pay
+  the extra ~30 ms once per real button edge. `stop_macro` and
+  `clear_macros` reset the counter alongside the other macro state.
+- Gate the `mainloop`'s `format_msg_switch(reply)` hex-encoding call
+  behind the cached `logger_level <= DEBUG` check (matching the other
+  debug log sites). Switch replies arrive frequently during subcommand
+  handshakes; unconditionally formatting their bytes to a hex string on
+  every reply was occasionally stretching a single mainloop tick past
+  the 7.6 ms budget at INFO level, skewing the absolute-time metronome
+  and shrinking the effective release window between macro lines.
 - Fix debug `self.times` array: `pop(0)` instead of `pop()` so the
   sliding window drops the oldest sample, not the newest.
 - Add silent BlueZ pairing agent (`nxbt/agent.py`, ported from

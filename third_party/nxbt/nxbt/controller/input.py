@@ -75,6 +75,25 @@ class InputParser():
         "max_y": 1510,
     }
 
+    # Minimum number of mainloop ticks (~7.6ms each at 132Hz) that must be
+    # spent in fully-neutral state after an "active" macro line (one that
+    # held a button or tilted a stick) completes, before the next macro line
+    # is allowed to drive any input. This is a defensive guarantee against
+    # macro generators that fail to emit an explicit wait line between two
+    # consecutive button presses: without this, the only release window
+    # between two adjacent active lines would be the single tick where
+    # `_set_neutral` is asserted at end-of-line, which is well below the
+    # ~16-33ms edge-detection window of typical Switch/3DS-port games and
+    # leads to "swallowed" buttons (e.g. A then DPAD merging into a single
+    # held event during automated drawing).
+    #
+    # 4 ticks ≈ 30 ms ≈ 2 game frames at 60 fps, which is enough for nearly
+    # all Switch titles to reliably register a release between presses.
+    # Wait-only macro lines (no button/stick token) are already neutral, so
+    # this counter is only armed after an active line ends, keeping the
+    # timing impact on well-formed macros to ~30ms per active edge.
+    MIN_INTER_LINE_NEUTRAL_TICKS = 4
+
     def __init__(self, protocol):
 
         self.protocol = protocol
@@ -95,6 +114,10 @@ class InputParser():
 
         # The start time for the current macro commands
         self.macro_timer_start = 0
+
+        # Remaining ticks of forced neutral after an active macro line ends.
+        # See MIN_INTER_LINE_NEUTRAL_TICKS for motivation.
+        self._post_line_neutral_ticks_left = 0
 
         self.controller_input = None
 
@@ -120,6 +143,7 @@ class InputParser():
             self.current_macro_commands = None
             self.macro_timer_length = 0
             self.macro_timer_start = 0
+            self._post_line_neutral_ticks_left = 0
         else:
             # Check if the macro is still in the buffer
             for i in range(0, len(self.macro_buffer)):
@@ -143,6 +167,7 @@ class InputParser():
         self.current_macro_commands = None
         self.macro_timer_length = 0
         self.macro_timer_start = 0
+        self._post_line_neutral_ticks_left = 0
         self.macro_buffer = []
 
         return
@@ -181,8 +206,21 @@ class InputParser():
         if dumps(self.controller_input) != dumps(DIRECT_INPUT_IDLE_PACKET):
             self.parse_controller_input(self.controller_input)
             self.controller_input = None
+            return
 
-        elif (self.macro_buffer or self.current_macro or
+        # Defensive inter-line neutral hold: if the previous active line
+        # only just ended, keep driving fully-neutral input for a few more
+        # ticks before allowing the next line's buttons to be applied.
+        # This guarantees the Switch sees a real release window even when
+        # consecutive macro lines are both non-neutral (e.g. a generator
+        # that forgot to emit an explicit wait line between two presses).
+        # See MIN_INTER_LINE_NEUTRAL_TICKS.
+        if self._post_line_neutral_ticks_left > 0:
+            self._post_line_neutral_ticks_left -= 1
+            self._set_neutral()
+            return
+
+        if (self.macro_buffer or self.current_macro or
               self.current_macro_commands):
             # Check if we can start on a new macro.
             if not self.current_macro and self.macro_buffer:
@@ -207,11 +245,22 @@ class InputParser():
             # Check if we're done inputting the current command
             time_delta = perf_counter() - self.macro_timer_start
             if time_delta > self.macro_timer_length:
+                # Capture whether the line we just finished was actively
+                # holding a button or stick. Wait-only lines don't need an
+                # extra neutral hold (they were already neutral), so we
+                # only arm the post-line counter for active lines.
+                line_was_active = (
+                    self.current_macro_commands is not None
+                    and len(self.current_macro_commands) >= 2
+                )
                 self.current_macro_commands = None
                 # Immediately assert neutral so that the last button of
                 # this line is never carried over into the next line or
                 # the between-chunk gap.
                 self._set_neutral()
+                if line_was_active:
+                    self._post_line_neutral_ticks_left = (
+                        self.MIN_INTER_LINE_NEUTRAL_TICKS)
                 # Check if we're done the current macro
                 if not self.current_macro and state:
                     finished = state["finished_macros"]

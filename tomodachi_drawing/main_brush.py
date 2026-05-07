@@ -180,6 +180,7 @@ def generate_commands(image, press, wait, min_gain, merge_threshold=0, return_ho
                     wait_text,
                 )
                 commands.append(f"A {press_text}")
+                commands.append(wait_text)
                 covered |= stamp_square(layer.mask.shape, center, size)
 
         fill_points = build_pixel_fill_plan(layer.mask, covered, current_pos)
@@ -200,6 +201,7 @@ def generate_commands(image, press, wait, min_gain, merge_threshold=0, return_ho
                     wait_text,
                 )
                 commands.append(f"A {press_text}")
+                commands.append(wait_text)
 
         if return_home_per_layer:
             current_pos = emit_canvas_move(
