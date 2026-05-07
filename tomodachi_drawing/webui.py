@@ -328,6 +328,7 @@ class DrawState:
             "finished_at": None,
             "pause_requested": False,
             "cancel_requested": False,
+            "benchmark": None,
         }
 
     def snapshot(self):
@@ -399,14 +400,256 @@ draw_state = DrawState()
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
 
+# Web UI strings (zh default + en). Embedded in the page for instant switching.
+I18N_CATALOG = {
+    "zh": {
+        "lang_label": "语言",
+        "page_title": "TomodachiDrawing WebUI",
+        "header_title": "TomodachiDrawing WebUI",
+        "seq_count_label": "已生成按键序列：",
+        "section_controller": "虚拟手柄",
+        "section_buttons": "发送 Switch 按键",
+        "section_upload": "上传图片并生成序列",
+        "section_stability": "稳定性测试序列",
+        "section_sequences": "按键序列",
+        "detail_pick": "请选择一个条目",
+        "h_layers": "颜色层列表",
+        "status_loading": "读取中",
+        "btn_connect": "等待主机连接虚拟手柄",
+        "btn_reconnect": "重新连接手柄",
+        "btn_lr": "发送 L+R",
+        "lbl_image": "图片文件，尺寸必须为 256x256",
+        "lbl_mode": "生成模式",
+        "mode_brush": "brush：优先使用大笔刷",
+        "mode_pixel": "pixel：逐像素绘制",
+        "lbl_press": "按下时长",
+        "lbl_wait": "等待时长",
+        "lbl_min_gain": "brush 最小收益",
+        "lbl_merge": "合并相近颜色阈值",
+        "label_return_home": "每个颜色层结束后回到 (0,0) 并把颜色归到底部",
+        "btn_generate": "生成按键序列",
+        "stability_intro": "生成大量 <code>DPAD_RIGHT</code> 与 <code>A</code>（按下时长 + 间隔与绘画宏相同），用于在真机上摸索最合适的间隔。生成后选中该条目，使用「绘制整图」发送到 Switch。",
+        "lbl_stability_pairs": "循环次数（一次 = 先 RIGHT 再 A）",
+        "lbl_stability_wait": "间隔时长",
+        "btn_stability": "生成稳定性测试",
+        "btn_draw_whole": "绘制整图",
+        "btn_draw_layer": "绘制当前颜色层",
+        "btn_draw_from_layer": "从当前颜色层开始绘制",
+        "btn_delete": "删除此序列",
+        "btn_pause": "暂停",
+        "btn_resume": "继续",
+        "btn_stop": "终止",
+        "link_macro": "查看 macro.txt",
+        "link_layer_macro": "查看颜色层 macro.txt",
+        "cap_upload": "上传图片",
+        "cap_quantized": "量化预览",
+        "cap_sequence": "按键序列回放预览",
+        "cap_layer": "当前颜色层预览",
+        "alt_upload": "上传图片预览",
+        "alt_quantized": "量化预览",
+        "alt_sequence": "按键序列回放预览",
+        "alt_layer": "当前颜色层预览",
+        "list_empty": "还没有生成按键序列",
+        "detail_empty": "请选择一个条目",
+        "layer_none": "该条目暂无颜色层拆分数据",
+        "lines_unit": "行",
+        "pixels_unit": "像素",
+        "lines_per_sec": "行/秒",
+        "eta_label": "剩余",
+        "status_idle": "未创建虚拟手柄",
+        "status_starting": "正在创建虚拟手柄",
+        "status_waiting": "等待 Switch 连接",
+        "status_connected": "已连接",
+        "status_error": "连接错误",
+        "poll_failed": "状态读取失败",
+        "meta_mode": "模式",
+        "meta_pairs": "循环次数",
+        "meta_press": "按下时长",
+        "meta_wait": "间隔时长",
+        "meta_macro_lines": "宏行数",
+        "meta_colors": "颜色层",
+        "meta_merge": "合并阈值",
+        "meta_return_home": "层后归零点",
+        "meta_gen_total": "生成总耗时",
+        "on": "开启",
+        "off": "关闭",
+        "mode_stability": "稳定性测试",
+        "bench_stab": "宏写入 {mw}s · 占位图 {ph}s",
+        "bench_full": "读图 {ing}s · 量化分层 {qu}s · 侧车 {du}s · 整图宏 {fmg}s · 整图预览 {fpv}s · 按层 {ll}s（宏 {lmg}s / 写文件与层预览 {lo}s）",
+        "draw_bench": "绘画 {outcome} · 总耗时 {total}s · {prep}读取宏 {read}s · 等待手柄 {cw}s · 宏发送 {macro}s · 暂停 {pause}s · 分块 {chunks} · 实际 {sent}/{tot} 行 · 平均 {lps} 行/秒",
+        "bench_prep": "生成增量宏 {s}s · ",
+        "bench_prep_empty": "",
+        "outcome_done": "完成",
+        "outcome_cancelled": "已终止",
+        "outcome_error": "出错",
+        "upload_generating": "正在生成，请稍候",
+        "upload_done_lines": "已生成 {n} 行按键序列",
+        "upload_done_bench": "已生成 {n} 行按键序列（总耗时 {t}s）",
+        "stab_generating": "正在生成…",
+        "stab_done": "已生成 {n} 行",
+        "stab_done_bench": "已生成 {n} 行（总耗时 {t}s），可选中后「绘制整图」发送",
+        "api_fallback": "请求失败",
+        "gen_fallback": "生成失败",
+        "confirm_from_layer": "将从颜色层 {layer} 开始绘制至最后（共 {n} 层）。\n首次发起需要重新生成宏，可能耗时几秒到十几秒。继续？",
+        "confirm_delete": "确定删除序列「{id}」？本地文件夹将一并删除，不可恢复。",
+        "draw_msg_sending_line": "正在发送第 {a}/{b} 行",
+        "draw_stop_near": "已终止在第 {a}/{b} 行附近，后续按键未发送",
+        "draw_pause_near": "已暂停在第 {a}/{b} 行附近，后续按键未发送",
+        "draw_from_layer_hsv": "正在从颜色层 {layer} (H{h} S{s} V{v}) 起绘制至最后",
+        "draw_from_layer_plain": "正在从颜色层 {layer} 起绘制至最后",
+        "draw_layer_hsv": "正在发送颜色层 {layer} (H{h} S{s} V{v}) 绘画按键序列",
+        "draw_layer_plain": "正在发送颜色层 {layer} 绘画按键序列",
+    },
+    "en": {
+        "lang_label": "Language",
+        "page_title": "TomodachiDrawing WebUI",
+        "header_title": "TomodachiDrawing WebUI",
+        "seq_count_label": "Saved sequences: ",
+        "section_controller": "Virtual controller",
+        "section_buttons": "Send Switch buttons",
+        "section_upload": "Upload image & generate macro",
+        "section_stability": "Stability test sequence",
+        "section_sequences": "Sequences",
+        "detail_pick": "Select an item",
+        "h_layers": "Color layers",
+        "status_loading": "Loading…",
+        "btn_connect": "Create & wait for host",
+        "btn_reconnect": "Reconnect controller",
+        "btn_lr": "Send L+R",
+        "lbl_image": "Image file (must be 256×256)",
+        "lbl_mode": "Generation mode",
+        "mode_brush": "brush: prefer large brush strokes",
+        "mode_pixel": "pixel: per-pixel drawing",
+        "lbl_press": "Press duration",
+        "lbl_wait": "Wait duration",
+        "lbl_min_gain": "brush min gain",
+        "lbl_merge": "Merge similar colors (threshold)",
+        "label_return_home": "After each color layer, return to (0,0) and reset color to bottom",
+        "btn_generate": "Generate macro",
+        "stability_intro": "Generates many <code>DPAD_RIGHT</code> and <code>A</code> lines (same timing as drawing macros) to tune intervals on hardware. Then select the entry and use <strong>Draw whole image</strong> to send to the Switch.",
+        "lbl_stability_pairs": "Loop count (one loop = RIGHT then A)",
+        "lbl_stability_wait": "Gap duration",
+        "btn_stability": "Generate stability test",
+        "btn_draw_whole": "Draw whole image",
+        "btn_draw_layer": "Draw current layer",
+        "btn_draw_from_layer": "Draw from current layer",
+        "btn_delete": "Delete sequence",
+        "btn_pause": "Pause",
+        "btn_resume": "Resume",
+        "btn_stop": "Stop",
+        "link_macro": "Open macro.txt",
+        "link_layer_macro": "Open layer macro.txt",
+        "cap_upload": "Uploaded image",
+        "cap_quantized": "Quantized preview",
+        "cap_sequence": "Macro playback preview",
+        "cap_layer": "Current layer preview",
+        "alt_upload": "Uploaded image preview",
+        "alt_quantized": "Quantized preview",
+        "alt_sequence": "Sequence preview",
+        "alt_layer": "Layer preview",
+        "list_empty": "No sequences yet",
+        "detail_empty": "Select an item",
+        "layer_none": "No per-layer data for this entry",
+        "lines_unit": "lines",
+        "pixels_unit": "px",
+        "lines_per_sec": "lines/s",
+        "eta_label": "ETA",
+        "status_idle": "Virtual controller not created",
+        "status_starting": "Creating virtual controller",
+        "status_waiting": "Waiting for Switch",
+        "status_connected": "Connected",
+        "status_error": "Connection error",
+        "poll_failed": "Failed to read status",
+        "meta_mode": "Mode",
+        "meta_pairs": "Loops",
+        "meta_press": "Press",
+        "meta_wait": "Wait / gap",
+        "meta_macro_lines": "Macro lines",
+        "meta_colors": "Color layers",
+        "meta_merge": "Merge threshold",
+        "meta_return_home": "Return home per layer",
+        "meta_gen_total": "Generation total",
+        "on": "On",
+        "off": "Off",
+        "mode_stability": "Stability test",
+        "bench_stab": "macro write {mw}s · placeholders {ph}s",
+        "bench_full": "ingest {ing}s · quantize {qu}s · dump {du}s · full macro {fmg}s · full preview {fpv}s · layers {ll}s (macro {lmg}s / IO & previews {lo}s)",
+        "draw_bench": "Draw {outcome} · total {total}s · {prep}read {read}s · wait ctrl {cw}s · macro active {macro}s · paused {pause}s · chunks {chunks} · sent {sent}/{tot} lines · avg {lps} lines/s",
+        "bench_prep": "partial macro {s}s · ",
+        "bench_prep_empty": "",
+        "outcome_done": "completed",
+        "outcome_cancelled": "stopped",
+        "outcome_error": "error",
+        "upload_generating": "Generating…",
+        "upload_done_lines": "Generated {n} macro lines",
+        "upload_done_bench": "Generated {n} macro lines ({t}s total)",
+        "stab_generating": "Generating…",
+        "stab_done": "Generated {n} lines",
+        "stab_done_bench": "Generated {n} lines ({t}s total). Select it and use Draw whole image.",
+        "api_fallback": "Request failed",
+        "gen_fallback": "Generation failed",
+        "confirm_from_layer": "Draw from layer {layer} through the end ({n} layers).\nThe partial macro may regenerate first (a few seconds). Continue?",
+        "confirm_delete": "Delete sequence “{id}”? The job folder will be removed permanently.",
+        "draw_msg_sending_line": "Sending line {a}/{b}",
+        "draw_stop_near": "Stopped around line {a}/{b}; remaining lines not sent",
+        "draw_pause_near": "Paused around line {a}/{b}; remaining lines not sent",
+        "draw_from_layer_hsv": "Drawing from layer {layer} (H{h} S{s} V{v}) to the end",
+        "draw_from_layer_plain": "Drawing from layer {layer} to the end",
+        "draw_layer_hsv": "Sending layer {layer} (H{h} S{s} V{v}) macro",
+        "draw_layer_plain": "Sending layer {layer} macro",
+    },
+}
 
-INDEX_HTML = """
+# Chinese UI/server strings → English (when UI language is English).
+ZH_TO_EN_UI = {
+    "未创建虚拟手柄": "Virtual controller not created",
+    "正在创建虚拟 Pro Controller": "Creating virtual Pro Controller",
+    "正在重新连接，已请求清理旧虚拟手柄": "Reconnecting; old controller cleanup requested",
+    "请在 Switch 的更改握法/顺序页面连接这个虚拟手柄": "On Switch, connect this controller from the Change Grip/Order screen",
+    "虚拟手柄已连接": "Virtual controller connected",
+    "虚拟手柄连接失败": "Virtual controller connection failed",
+    "虚拟手柄尚未连接": "Virtual controller not connected",
+    "未开始绘画": "Drawing not started",
+    "已暂停，后续按键未发送": "Paused; remaining inputs not sent",
+    "继续发送绘画按键序列": "Resuming macro playback",
+    "正在终止绘画，停止当前按键": "Stopping drawing; halting current macro",
+    "找不到按键序列": "Sequence not found",
+    "正在发送绘画按键序列": "Sending drawing macro",
+    "正在发送整图绘画按键序列": "Sending whole-image macro",
+    "绘画已终止，后续按键未发送": "Drawing stopped; remaining lines not sent",
+    "绘画按键序列发送完成": "Macro playback finished",
+    "绘画发送失败": "Drawing send failed",
+    "绘画进行中，请先终止或等待结束后再重新连接手柄": "Drawing in progress; stop or wait before reconnecting",
+    "绘画进行中，暂时不能发送单独按键": "Drawing in progress; single buttons disabled",
+    "不支持的按键": "Unsupported button",
+    "请选择图片": "Choose an image",
+    "mode 只能是 pixel 或 brush": "mode must be pixel or brush",
+    "参数必须为正数，合并阈值可以为 0": "Parameters must be positive; merge threshold may be 0",
+    "pairs / press / wait 参数无效": "Invalid pairs / press / wait",
+    "该序列正在绘制或终止中，请先停止绘画后再删除": "Sequence is drawing or stopping; stop drawing first",
+    "已有绘画任务正在进行": "A drawing task is already running",
+    "找不到颜色层": "Layer not found",
+    "该颜色层缺少宏文件": "This layer has no macro file",
+    "当前没有正在运行的绘画任务": "No drawing task is running",
+    "当前没有已暂停的绘画任务": "No paused drawing task",
+    "当前没有可以终止的绘画任务": "Nothing to stop",
+    "找不到文件": "File not found",
+    "第一层等价于绘制整图，请改用「绘制整图」": "First layer equals whole image; use Draw whole image",
+    "缺少 source.png，无法重新生成": "Missing source.png; cannot regenerate",
+    "按下时长与间隔须为正数": "Press and gap durations must be positive",
+}
+ZH_TO_EN_UI[f"循环次数须在 1～{STABILITY_MAX_PAIRS} 之间"] = (
+    f"Loop count must be between 1 and {STABILITY_MAX_PAIRS}"
+)
+
+
+INDEX_HTML = r"""
 <!doctype html>
-<html lang="zh-CN">
+<html lang="{{ html_lang }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TomodachiDrawing WebUI</title>
+  <title>{{ i18n_catalog[ui_lang]['page_title'] }}</title>
   <style>
     :root {
       color-scheme: light;
@@ -606,31 +849,58 @@ INDEX_HTML = """
       main, .layout, .previews { grid-template-columns: 1fr; }
       header { align-items: flex-start; flex-direction: column; }
     }
+    header .header-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .lang-select {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .lang-select select {
+      width: auto;
+      min-width: 110px;
+      min-height: 32px;
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>TomodachiDrawing WebUI</h1>
-    <div class="muted">已生成按键序列：<strong id="sequenceCount">0</strong></div>
+    <h1 data-i18n="header_title">TomodachiDrawing WebUI</h1>
+    <div class="header-right">
+      <label class="lang-select">
+        <span data-i18n="lang_label">语言</span>
+        <select id="langSelect" aria-label="Language">
+          <option value="zh">中文</option>
+          <option value="en">English</option>
+        </select>
+      </label>
+      <div class="muted"><span data-i18n="seq_count_label">已生成按键序列：</span><strong id="sequenceCount">0</strong></div>
+    </div>
   </header>
   <main>
     <div class="stack">
       <section>
-        <h2>虚拟手柄</h2>
+        <h2 data-i18n="section_controller">虚拟手柄</h2>
         <div class="status">
-          <strong id="controllerText">读取中</strong>
+          <strong id="controllerText" data-i18n="status_loading">读取中</strong>
           <span id="controllerMessage" class="muted"></span>
           <span id="controllerError" class="muted error"></span>
         </div>
         <div class="row" style="margin-top: 12px">
-          <button class="primary" id="connectBtn">等待主机连接虚拟手柄</button>
-          <button id="reconnectBtn">重新连接手柄</button>
-          <button id="lrBtn">发送 L+R</button>
+          <button class="primary" id="connectBtn" data-i18n="btn_connect">等待主机连接虚拟手柄</button>
+          <button id="reconnectBtn" data-i18n="btn_reconnect">重新连接手柄</button>
+          <button id="lrBtn" data-i18n="btn_lr">发送 L+R</button>
         </div>
       </section>
 
       <section>
-        <h2>发送 Switch 按键</h2>
+        <h2 data-i18n="section_buttons">发送 Switch 按键</h2>
         <div class="controller-pad" id="controllerPad">
           <div class="pad-shoulder-left">
             <button data-button="ZL">ZL</button>
@@ -682,58 +952,58 @@ INDEX_HTML = """
       </section>
 
       <section>
-        <h2>上传图片并生成序列</h2>
+        <h2 data-i18n="section_upload">上传图片并生成序列</h2>
         <form id="uploadForm">
-          <label for="imageInput">图片文件，尺寸必须为 256x256</label>
+          <label for="imageInput" data-i18n="lbl_image">图片文件，尺寸必须为 256x256</label>
           <input id="imageInput" name="image" type="file" accept="image/*" required>
-          <label for="modeInput">生成模式</label>
+          <label for="modeInput" data-i18n="lbl_mode">生成模式</label>
           <select id="modeInput" name="mode">
-            <option value="brush">brush：优先使用大笔刷</option>
-            <option value="pixel">pixel：逐像素绘制</option>
+            <option value="brush" data-i18n="mode_brush">brush：优先使用大笔刷</option>
+            <option value="pixel" data-i18n="mode_pixel">pixel：逐像素绘制</option>
           </select>
           <div class="row">
             <div style="flex:1">
-              <label for="pressInput">按下时长</label>
+              <label for="pressInput" data-i18n="lbl_press">按下时长</label>
               <input id="pressInput" name="press" type="number" step="0.001" min="0.001" value="0.075">
             </div>
             <div style="flex:1">
-              <label for="waitInput">等待时长</label>
+              <label for="waitInput" data-i18n="lbl_wait">等待时长</label>
               <input id="waitInput" name="wait" type="number" step="0.001" min="0.001" value="0.075">
             </div>
           </div>
-          <label for="minGainInput">brush 最小收益</label>
+          <label for="minGainInput" data-i18n="lbl_min_gain">brush 最小收益</label>
           <input id="minGainInput" name="min_gain" type="number" step="1" min="1" value="1">
-          <label for="mergeThresholdInput">合并相近颜色阈值</label>
+          <label for="mergeThresholdInput" data-i18n="lbl_merge">合并相近颜色阈值</label>
           <input id="mergeThresholdInput" name="merge_threshold" type="number" step="1" min="0" value="0">
           <label style="display:flex; gap:8px; align-items:center; color: var(--text); margin-top: 12px;">
             <input id="returnHomePerLayerInput" name="return_home_per_layer" type="checkbox" checked style="width:auto; min-height:auto;">
-            每个颜色层结束后回到 (0,0) 并把颜色归到底部
+            <span data-i18n="label_return_home">每个颜色层结束后回到 (0,0) 并把颜色归到底部</span>
           </label>
           <div class="row" style="margin-top: 12px">
-            <button class="blue" type="submit">生成按键序列</button>
+            <button class="blue" type="submit" data-i18n="btn_generate">生成按键序列</button>
           </div>
         </form>
         <p id="uploadMessage" class="muted"></p>
       </section>
 
       <section>
-        <h2>稳定性测试序列</h2>
-        <p class="muted">生成大量 <code>DPAD_RIGHT</code> 与 <code>A</code>（按下时长 + 间隔与绘画宏相同），用于在真机上摸索最合适的间隔。生成后选中该条目，使用「绘制整图」发送到 Switch。</p>
+        <h2 data-i18n="section_stability">稳定性测试序列</h2>
+        <p class="muted" data-i18n-html="stability_intro">生成大量 <code>DPAD_RIGHT</code> 与 <code>A</code>（按下时长 + 间隔与绘画宏相同），用于在真机上摸索最合适的间隔。生成后选中该条目，使用「绘制整图」发送到 Switch。</p>
         <form id="stabilityForm">
-          <label for="stabilityPairsInput">循环次数（一次 = 先 RIGHT 再 A）</label>
+          <label for="stabilityPairsInput" data-i18n="lbl_stability_pairs">循环次数（一次 = 先 RIGHT 再 A）</label>
           <input id="stabilityPairsInput" name="pairs" type="number" step="1" min="1" max="50000" value="800" required>
           <div class="row">
             <div style="flex:1">
-              <label for="stabilityPressInput">按下时长</label>
+              <label for="stabilityPressInput" data-i18n="lbl_press">按下时长</label>
               <input id="stabilityPressInput" name="press" type="number" step="0.001" min="0.001" value="0.075">
             </div>
             <div style="flex:1">
-              <label for="stabilityWaitInput">间隔时长</label>
+              <label for="stabilityWaitInput" data-i18n="lbl_stability_wait">间隔时长</label>
               <input id="stabilityWaitInput" name="wait" type="number" step="0.001" min="0.001" value="0.075">
             </div>
           </div>
           <div class="row" style="margin-top: 12px">
-            <button class="blue" type="submit">生成稳定性测试</button>
+            <button class="blue" type="submit" data-i18n="btn_stability">生成稳定性测试</button>
           </div>
         </form>
         <p id="stabilityMessage" class="muted"></p>
@@ -743,46 +1013,47 @@ INDEX_HTML = """
     <section>
       <div class="layout">
         <div>
-          <h2>按键序列</h2>
+          <h2 data-i18n="section_sequences">按键序列</h2>
           <div id="sequenceList" class="list"></div>
         </div>
         <div>
           <h2 id="detailTitle">请选择一个条目</h2>
           <div id="detailMeta" class="meta"></div>
           <div class="row">
-            <button class="primary" id="drawBtn">绘制整图</button>
-            <button class="blue" id="drawLayerBtn">绘制当前颜色层</button>
-            <button class="blue" id="drawFromLayerBtn">从当前颜色层开始绘制</button>
-            <button class="danger" id="deleteSeqBtn" type="button">删除此序列</button>
-            <button id="pauseBtn">暂停</button>
-            <button class="danger" id="stopBtn">终止</button>
-            <a id="macroLink" class="muted" href="#" target="_blank" rel="noreferrer">查看 macro.txt</a>
-            <a id="layerMacroLink" class="muted" href="#" target="_blank" rel="noreferrer">查看颜色层 macro.txt</a>
+            <button class="primary" id="drawBtn" data-i18n="btn_draw_whole">绘制整图</button>
+            <button class="blue" id="drawLayerBtn" data-i18n="btn_draw_layer">绘制当前颜色层</button>
+            <button class="blue" id="drawFromLayerBtn" data-i18n="btn_draw_from_layer">从当前颜色层开始绘制</button>
+            <button class="danger" id="deleteSeqBtn" type="button" data-i18n="btn_delete">删除此序列</button>
+            <button id="pauseBtn" data-i18n="btn_pause">暂停</button>
+            <button class="danger" id="stopBtn" data-i18n="btn_stop">终止</button>
+            <a id="macroLink" class="muted" href="#" target="_blank" rel="noreferrer" data-i18n="link_macro">查看 macro.txt</a>
+            <a id="layerMacroLink" class="muted" href="#" target="_blank" rel="noreferrer" data-i18n="link_layer_macro">查看颜色层 macro.txt</a>
           </div>
           <div style="margin: 12px 0">
             <progress id="drawProgress" max="100" value="0"></progress>
             <div id="drawText" class="muted"></div>
+            <div id="drawBench" class="muted" style="font-size: 0.85em; line-height: 1.45; margin-top: 4px;"></div>
           </div>
           <div class="previews">
             <figure>
-              <figcaption>上传图片</figcaption>
-              <img id="sourcePreview" class="preview" alt="上传图片预览">
+              <figcaption data-i18n="cap_upload">上传图片</figcaption>
+              <img id="sourcePreview" class="preview" alt="" data-i18n-alt="alt_upload">
             </figure>
             <figure>
-              <figcaption>量化预览</figcaption>
-              <img id="quantizedPreview" class="preview" alt="量化预览">
+              <figcaption data-i18n="cap_quantized">量化预览</figcaption>
+              <img id="quantizedPreview" class="preview" alt="" data-i18n-alt="alt_quantized">
             </figure>
             <figure>
-              <figcaption>按键序列回放预览</figcaption>
-              <img id="sequencePreview" class="preview" alt="按键序列回放预览">
+              <figcaption data-i18n="cap_sequence">按键序列回放预览</figcaption>
+              <img id="sequencePreview" class="preview" alt="" data-i18n-alt="alt_sequence">
             </figure>
             <figure>
-              <figcaption>当前颜色层预览</figcaption>
-              <img id="layerPreview" class="preview" alt="当前颜色层预览">
+              <figcaption data-i18n="cap_layer">当前颜色层预览</figcaption>
+              <img id="layerPreview" class="preview" alt="" data-i18n-alt="alt_layer">
             </figure>
           </div>
           <div style="margin-top: 12px">
-            <h2 style="margin-bottom: 8px">颜色层列表</h2>
+            <h2 style="margin-bottom: 8px" data-i18n="h_layers">颜色层列表</h2>
             <div id="layerList" class="list" style="max-height: 260px"></div>
           </div>
         </div>
@@ -792,20 +1063,93 @@ INDEX_HTML = """
 
   <script>
     const buttons = {{ buttons|tojson }};
+    const I18N = {{ i18n_catalog|tojson }};
+    const ZH_TO_EN = {{ zh_to_en_ui|tojson }};
+    const LS_KEY = 'tomodachi_lang';
+    const COOKIE = 'tomodachi_lang';
+
+    let lang = localStorage.getItem(LS_KEY) || '{{ ui_lang }}';
+    if (lang !== 'zh' && lang !== 'en') lang = 'zh';
+
     let selectedId = null;
     let selectedLayerId = null;
     let entries = [];
 
     const el = id => document.getElementById(id);
 
+    function t(key) {
+      const pack = I18N[lang] || I18N.zh;
+      if (pack && Object.prototype.hasOwnProperty.call(pack, key)) return pack[key];
+      return (I18N.zh && I18N.zh[key]) || key;
+    }
+
+    function fmt(str, obj) {
+      return str.replace(/\{(\w+)\}/g, (_, k) => (obj[k] !== undefined && obj[k] !== null) ? String(obj[k]) : '');
+    }
+
+    function translateKnownZh(s) {
+      if (!s || lang === 'zh') return s;
+      return ZH_TO_EN[s] || s;
+    }
+
+    function translateDrawMessage(msg) {
+      if (!msg || lang === 'zh') return msg;
+      const direct = ZH_TO_EN[msg];
+      if (direct) return direct;
+      let m;
+      if ((m = msg.match(/^正在发送第 (\d+)\/(\d+) 行$/)))
+        return fmt(t('draw_msg_sending_line'), { a: m[1], b: m[2] });
+      if ((m = msg.match(/^已终止在第 (\d+)\/(\d+) 行附近，后续按键未发送$/)))
+        return fmt(t('draw_stop_near'), { a: m[1], b: m[2] });
+      if ((m = msg.match(/^已暂停在第 (\d+)\/(\d+) 行附近，后续按键未发送$/)))
+        return fmt(t('draw_pause_near'), { a: m[1], b: m[2] });
+      if ((m = msg.match(/^正在从颜色层 (\S+) \(H(\d+) S(\d+) V(\d+)\) 起绘制至最后$/)))
+        return fmt(t('draw_from_layer_hsv'), { layer: m[1], h: m[2], s: m[3], v: m[4] });
+      if ((m = msg.match(/^正在从颜色层 (\S+) 起绘制至最后$/)))
+        return fmt(t('draw_from_layer_plain'), { layer: m[1] });
+      if ((m = msg.match(/^正在发送颜色层 (\S+) \(H(\d+) S(\d+) V(\d+)\) 绘画按键序列$/)))
+        return fmt(t('draw_layer_hsv'), { layer: m[1], h: m[2], s: m[3], v: m[4] });
+      if ((m = msg.match(/^正在发送颜色层 (\S+) 绘画按键序列$/)))
+        return fmt(t('draw_layer_plain'), { layer: m[1] });
+      return msg;
+    }
+
+    function userFacingErrorMessage(s) {
+      return translateKnownZh(s);
+    }
+
+    function applyI18n() {
+      document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+      document.title = t('page_title');
+      for (const node of document.querySelectorAll('[data-i18n]')) {
+        const key = node.getAttribute('data-i18n');
+        if (key) node.textContent = t(key);
+      }
+      for (const node of document.querySelectorAll('[data-i18n-html]')) {
+        const key = node.getAttribute('data-i18n-html');
+        if (key) node.innerHTML = t(key);
+      }
+      for (const node of document.querySelectorAll('[data-i18n-alt]')) {
+        const key = node.getAttribute('data-i18n-alt');
+        if (key) node.setAttribute('alt', t(key));
+      }
+      el('langSelect').value = lang;
+    }
+
+    function persistLang(next) {
+      lang = next;
+      localStorage.setItem(LS_KEY, lang);
+      document.cookie = `${COOKIE}=${encodeURIComponent(lang)}; path=/; max-age=31536000; SameSite=Lax`;
+      applyI18n();
+      renderList();
+      renderDetail();
+    }
+
+    el('langSelect').onchange = () => persistLang(el('langSelect').value);
+
     function statusText(status) {
-      return {
-        idle: '未创建虚拟手柄',
-        starting: '正在创建虚拟手柄',
-        waiting: '等待 Switch 连接',
-        connected: '已连接',
-        error: '连接错误'
-      }[status] || status;
+      const key = { idle: 'status_idle', starting: 'status_starting', waiting: 'status_waiting', connected: 'status_connected', error: 'status_error' }[status];
+      return key ? t(key) : status;
     }
 
     function formatEta(seconds) {
@@ -821,7 +1165,10 @@ INDEX_HTML = """
     async function api(path, options = {}) {
       const res = await fetch(path, options);
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || data.message || '请求失败');
+      if (!res.ok) {
+        const raw = data.error || data.message || t('api_fallback');
+        throw new Error(userFacingErrorMessage(raw));
+      }
       return data;
     }
 
@@ -832,8 +1179,8 @@ INDEX_HTML = """
         const item = entries.find(entry => entry.id === selectedId);
         const hasLayer = !!(item && item.layers && item.layers.some(layer => layer.id === selectedLayerId));
         el('controllerText').textContent = statusText(c.status);
-        el('controllerMessage').textContent = c.message || '';
-        el('controllerError').textContent = c.error || '';
+        el('controllerMessage').textContent = translateKnownZh(c.message || '');
+        el('controllerError').textContent = translateKnownZh(c.error || '');
         el('sequenceCount').textContent = data.sequence_count;
         const drawBusy = data.draw.status === 'running' || data.draw.status === 'paused' || data.draw.status === 'stopping';
         el('connectBtn').disabled = drawBusy || c.status === 'starting' || c.status === 'waiting' || c.status === 'connected';
@@ -845,17 +1192,39 @@ INDEX_HTML = """
         const layerIdx = item2 && item2.layers ? item2.layers.findIndex(layer => layer.id === selectedLayerId) : -1;
         el('drawFromLayerBtn').disabled = !selectedId || !hasLayer || layerIdx <= 0 || c.status !== 'connected' || drawBusy;
         el('pauseBtn').disabled = data.draw.status !== 'running' && data.draw.status !== 'paused';
-        el('pauseBtn').textContent = data.draw.status === 'paused' ? '继续' : '暂停';
+        el('pauseBtn').textContent = data.draw.status === 'paused' ? t('btn_resume') : t('btn_pause');
         el('stopBtn').disabled = data.draw.status !== 'running' && data.draw.status !== 'paused';
         const drawingSeq = data.draw.sequence_id;
         el('deleteSeqBtn').disabled = !selectedId || (drawBusy && drawingSeq === selectedId);
         el('drawProgress').value = data.draw.percent || 0;
         const speed = Number(data.draw.lines_per_second || 0).toFixed(2);
         const eta = formatEta(data.draw.eta_seconds);
-        el('drawText').textContent = `${data.draw.message || ''} ${data.draw.percent || 0}% · ${data.draw.sent_lines || 0}/${data.draw.total_lines || 0} 行 · ${speed} 行/秒 · 剩余 ${eta}`;
+        const dm = translateDrawMessage(data.draw.message || '');
+        el('drawText').textContent = `${dm} ${data.draw.percent || 0}% · ${data.draw.sent_lines || 0}/${data.draw.total_lines || 0} ${t('lines_unit')} · ${speed} ${t('lines_per_sec')} · ${t('eta_label')} ${eta}`;
+        const bench = data.draw.benchmark;
+        if (bench) {
+          const outcomeKey = { completed: 'outcome_done', cancelled: 'outcome_cancelled', error: 'outcome_error' }[bench.outcome] || '';
+          const outcomeLabel = outcomeKey ? t(outcomeKey) : bench.outcome;
+          const prepText = bench.prep_seconds > 0 ? fmt(t('bench_prep'), { s: bench.prep_seconds }) : t('bench_prep_empty');
+          el('drawBench').textContent = fmt(t('draw_bench'), {
+            outcome: outcomeLabel,
+            total: bench.total_seconds,
+            prep: prepText,
+            read: bench.read_seconds,
+            cw: bench.controller_wait_seconds,
+            macro: bench.macro_active_seconds,
+            pause: bench.paused_seconds,
+            chunks: bench.chunks_count,
+            sent: bench.sent_lines,
+            tot: bench.total_lines,
+            lps: bench.lines_per_second_overall,
+          });
+        } else {
+          el('drawBench').textContent = '';
+        }
       } catch (err) {
-        el('controllerText').textContent = '状态读取失败';
-        el('controllerError').textContent = err.message;
+        el('controllerText').textContent = t('poll_failed');
+        el('controllerError').textContent = userFacingErrorMessage(err.message);
       }
     }
 
@@ -872,13 +1241,13 @@ INDEX_HTML = """
       const list = el('sequenceList');
       list.innerHTML = '';
       if (!entries.length) {
-        list.innerHTML = '<p class="muted">还没有生成按键序列</p>';
+        list.innerHTML = `<p class="muted">${t('list_empty')}</p>`;
         return;
       }
       for (const item of entries) {
         const button = document.createElement('button');
         button.className = 'item' + (item.id === selectedId ? ' active' : '');
-        button.innerHTML = `<strong>${item.source_name}</strong><span class="muted">${item.mode} · ${item.macro_lines} 行 · ${item.created_at}</span>`;
+        button.innerHTML = `<strong>${item.source_name}</strong><span class="muted">${item.mode} · ${item.macro_lines} ${t('lines_unit')} · ${item.created_at}</span>`;
         button.onclick = () => {
           selectedId = item.id;
           renderList();
@@ -892,12 +1261,12 @@ INDEX_HTML = """
     function renderDetail() {
       const item = entries.find(entry => entry.id === selectedId);
       if (!item) {
-        el('detailTitle').textContent = '请选择一个条目';
+        el('detailTitle').textContent = t('detail_pick');
         el('detailMeta').innerHTML = '';
         for (const id of ['sourcePreview', 'quantizedPreview', 'sequencePreview', 'layerPreview']) el(id).removeAttribute('src');
         el('macroLink').href = '#';
         el('layerMacroLink').href = '#';
-        el('layerList').innerHTML = '<p class="muted">请选择一个条目</p>';
+        el('layerList').innerHTML = `<p class="muted">${t('detail_empty')}</p>`;
         selectedLayerId = null;
         return;
       }
@@ -912,28 +1281,32 @@ INDEX_HTML = """
       let benchRow = '';
       if (b) {
         const benchLines = isStability
-          ? `宏写入 ${b.macro_write_seconds}s · 占位图 ${b.placeholder_images_seconds}s`
-          : `读图 ${b.ingest_seconds}s · 量化分层 ${b.quantize_seconds}s · 侧车 ${b.dump_seconds}s · 整图宏 ${b.full_macro_generate_seconds}s · 整图预览 ${b.full_preview_seconds}s · 按层 ${b.layers_loop_seconds}s（宏 ${b.layers_macro_generate_seconds}s / 写文件与层预览 ${b.layers_other_seconds}s）`;
+          ? fmt(t('bench_stab'), { mw: b.macro_write_seconds, ph: b.placeholder_images_seconds })
+          : fmt(t('bench_full'), {
+              ing: b.ingest_seconds, qu: b.quantize_seconds, du: b.dump_seconds,
+              fmg: b.full_macro_generate_seconds, fpv: b.full_preview_seconds,
+              ll: b.layers_loop_seconds, lmg: b.layers_macro_generate_seconds, lo: b.layers_other_seconds,
+            });
         benchRow = `
-        <div><span class="muted">生成总耗时</span><b>${b.total_seconds}s</b></div>
+        <div><span class="muted">${t('meta_gen_total')}</span><b>${b.total_seconds}s</b></div>
         <div class="muted" style="font-size:0.85em; grid-column: 1 / -1; line-height:1.45;">
           ${benchLines}
         </div>`;
       }
       if (isStability) {
         el('detailMeta').innerHTML = `
-        <div><span class="muted">模式</span><b>稳定性测试</b></div>
-        <div><span class="muted">循环次数</span><b>${item.pairs}</b></div>
-        <div><span class="muted">按下时长</span><b>${item.press}</b></div>
-        <div><span class="muted">间隔时长</span><b>${item.wait}</b></div>
-        <div><span class="muted">宏行数</span><b>${item.macro_lines}</b></div>${benchRow}`;
+        <div><span class="muted">${t('meta_mode')}</span><b>${t('mode_stability')}</b></div>
+        <div><span class="muted">${t('meta_pairs')}</span><b>${item.pairs}</b></div>
+        <div><span class="muted">${t('meta_press')}</span><b>${item.press}</b></div>
+        <div><span class="muted">${t('meta_wait')}</span><b>${item.wait}</b></div>
+        <div><span class="muted">${t('meta_macro_lines')}</span><b>${item.macro_lines}</b></div>${benchRow}`;
       } else {
         el('detailMeta').innerHTML = `
-        <div><span class="muted">模式</span><b>${item.mode}</b></div>
-        <div><span class="muted">颜色层</span><b>${item.colors}</b></div>
-        <div><span class="muted">宏行数</span><b>${item.macro_lines}</b></div>
-        <div><span class="muted">合并阈值</span><b>${item.merge_threshold || 0}</b></div>
-        <div><span class="muted">层后归零点</span><b>${item.return_home_per_layer ? '开启' : '关闭'}</b></div>${benchRow}`;
+        <div><span class="muted">${t('meta_mode')}</span><b>${item.mode}</b></div>
+        <div><span class="muted">${t('meta_colors')}</span><b>${item.colors}</b></div>
+        <div><span class="muted">${t('meta_macro_lines')}</span><b>${item.macro_lines}</b></div>
+        <div><span class="muted">${t('meta_merge')}</span><b>${item.merge_threshold || 0}</b></div>
+        <div><span class="muted">${t('meta_return_home')}</span><b>${item.return_home_per_layer ? t('on') : t('off')}</b></div>${benchRow}`;
       }
       el('sourcePreview').src = item.source_url;
       el('quantizedPreview').src = item.quantized_preview_url;
@@ -953,14 +1326,14 @@ INDEX_HTML = """
       const layers = item.layers || [];
       list.innerHTML = '';
       if (!layers.length) {
-        list.innerHTML = '<p class="muted">该条目暂无颜色层拆分数据</p>';
+        list.innerHTML = `<p class="muted">${t('layer_none')}</p>`;
         return;
       }
       for (const layer of layers) {
         const color = layer.color || ['?', '?', '?'];
         const button = document.createElement('button');
         button.className = 'item' + (layer.id === activeLayerId ? ' active' : '');
-        button.innerHTML = `<strong>${layer.id} · H${color[0]} S${color[1]} V${color[2]}</strong><span class="muted">${layer.count || 0} 像素 · ${layer.macro_lines || 0} 行</span>`;
+        button.innerHTML = `<strong>${layer.id} · H${color[0]} S${color[1]} V${color[2]}</strong><span class="muted">${layer.count || 0} ${t('pixels_unit')} · ${layer.macro_lines || 0} ${t('lines_unit')}</span>`;
         button.onclick = () => {
           selectedLayerId = layer.id;
           renderDetail();
@@ -982,7 +1355,7 @@ INDEX_HTML = """
               body: JSON.stringify({button: buttonName})
             });
           } catch (err) {
-            alert(err.message);
+            alert(userFacingErrorMessage(err.message));
           }
         };
       }
@@ -990,33 +1363,33 @@ INDEX_HTML = """
 
     el('connectBtn').onclick = async () => {
       try { await api('/api/controller/connect', {method: 'POST'}); }
-      catch (err) { alert(err.message); }
+      catch (err) { alert(userFacingErrorMessage(err.message)); }
       pollStatus();
     };
 
     el('reconnectBtn').onclick = async () => {
       try { await api('/api/controller/reconnect', {method: 'POST'}); }
-      catch (err) { alert(err.message); }
+      catch (err) { alert(userFacingErrorMessage(err.message)); }
       pollStatus();
     };
 
     el('lrBtn').onclick = async () => {
       try { await api('/api/controller/lr', {method: 'POST'}); }
-      catch (err) { alert(err.message); }
+      catch (err) { alert(userFacingErrorMessage(err.message)); }
       pollStatus();
     };
 
     el('drawBtn').onclick = async () => {
       if (!selectedId) return;
       try { await api(`/api/draw/${selectedId}`, {method: 'POST'}); }
-      catch (err) { alert(err.message); }
+      catch (err) { alert(userFacingErrorMessage(err.message)); }
       pollStatus();
     };
 
     el('drawLayerBtn').onclick = async () => {
       if (!selectedId || !selectedLayerId) return;
       try { await api(`/api/draw/${selectedId}/layer/${selectedLayerId}`, {method: 'POST'}); }
-      catch (err) { alert(err.message); }
+      catch (err) { alert(userFacingErrorMessage(err.message)); }
       pollStatus();
     };
 
@@ -1027,22 +1400,22 @@ INDEX_HTML = """
       const idx = layers.findIndex(layer => layer.id === selectedLayerId);
       if (idx <= 0) return;
       const remaining = layers.length - idx;
-      if (!confirm(`将从颜色层 ${selectedLayerId} 开始绘制至最后（共 ${remaining} 层）。\n首次发起需要重新生成宏，可能耗时几秒到十几秒。继续？`)) return;
+      if (!confirm(fmt(t('confirm_from_layer'), { layer: selectedLayerId, n: remaining }))) return;
       try { await api(`/api/draw/${selectedId}/from-layer/${selectedLayerId}`, {method: 'POST'}); }
-      catch (err) { alert(err.message); }
+      catch (err) { alert(userFacingErrorMessage(err.message)); }
       pollStatus();
     };
 
     el('deleteSeqBtn').onclick = async () => {
       if (!selectedId) return;
-      if (!confirm(`确定删除序列「${selectedId}」？本地文件夹将一并删除，不可恢复。`)) return;
+      if (!confirm(fmt(t('confirm_delete'), { id: selectedId }))) return;
       try {
         await api(`/api/sequences/${encodeURIComponent(selectedId)}`, {method: 'DELETE'});
         selectedId = null;
         selectedLayerId = null;
         await loadEntries();
       } catch (err) {
-        alert(err.message);
+        alert(userFacingErrorMessage(err.message));
       }
       pollStatus();
     };
@@ -1053,39 +1426,39 @@ INDEX_HTML = """
         const path = status === 'paused' ? '/api/draw/resume' : '/api/draw/pause';
         await api(path, {method: 'POST'});
       } catch (err) {
-        alert(err.message);
+        alert(userFacingErrorMessage(err.message));
       }
       pollStatus();
     };
 
     el('stopBtn').onclick = async () => {
       try { await api('/api/draw/stop', {method: 'POST'}); }
-      catch (err) { alert(err.message); }
+      catch (err) { alert(userFacingErrorMessage(err.message)); }
       pollStatus();
     };
 
     el('uploadForm').onsubmit = async event => {
       event.preventDefault();
-      el('uploadMessage').textContent = '正在生成，请稍候';
+      el('uploadMessage').textContent = t('upload_generating');
       try {
         const form = new FormData(event.currentTarget);
         const res = await fetch('/api/sequences', {method: 'POST', body: form});
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || '生成失败');
+        if (!res.ok) throw new Error(data.error || t('gen_fallback'));
         selectedId = data.entry.id;
         const bt = data.entry.benchmark && data.entry.benchmark.total_seconds;
         el('uploadMessage').textContent = bt != null
-          ? `已生成 ${data.entry.macro_lines} 行按键序列（总耗时 ${Number(bt).toFixed(2)}s）`
-          : `已生成 ${data.entry.macro_lines} 行按键序列`;
+          ? fmt(t('upload_done_bench'), { n: data.entry.macro_lines, t: Number(bt).toFixed(2) })
+          : fmt(t('upload_done_lines'), { n: data.entry.macro_lines });
         await loadEntries();
       } catch (err) {
-        el('uploadMessage').textContent = err.message;
+        el('uploadMessage').textContent = userFacingErrorMessage(err.message);
       }
     };
 
     el('stabilityForm').onsubmit = async event => {
       event.preventDefault();
-      el('stabilityMessage').textContent = '正在生成…';
+      el('stabilityMessage').textContent = t('stab_generating');
       try {
         const fd = new FormData(event.currentTarget);
         const body = {
@@ -1099,18 +1472,19 @@ INDEX_HTML = """
           body: JSON.stringify(body),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || '生成失败');
+        if (!res.ok) throw new Error(data.error || t('gen_fallback'));
         selectedId = data.entry.id;
         const bt = data.entry.benchmark && data.entry.benchmark.total_seconds;
         el('stabilityMessage').textContent = bt != null
-          ? `已生成 ${data.entry.macro_lines} 行（总耗时 ${Number(bt).toFixed(2)}s），可选中后「绘制整图」发送`
-          : `已生成 ${data.entry.macro_lines} 行`;
+          ? fmt(t('stab_done_bench'), { n: data.entry.macro_lines, t: Number(bt).toFixed(2) })
+          : fmt(t('stab_done'), { n: data.entry.macro_lines });
         await loadEntries(true);
       } catch (err) {
-        el('stabilityMessage').textContent = err.message;
+        el('stabilityMessage').textContent = userFacingErrorMessage(err.message);
       }
     };
 
+    applyI18n();
     initButtons();
     loadEntries();
     pollStatus();
@@ -1149,6 +1523,43 @@ def finalize_job_benchmark(segments, job_started_perf):
     out = {key: round(val, 4) for key, val in segments.items()}
     out["total_seconds"] = round(total, 4)
     return out
+
+
+def finalize_draw_benchmark(segments, draw_started_perf, sent_lines, total_lines, outcome):
+    """Round drawing-phase timings and append totals/throughput for a draw run."""
+    total = time.perf_counter() - draw_started_perf
+    out = {
+        key: (round(val, 4) if isinstance(val, float) else val)
+        for key, val in segments.items()
+    }
+    out["total_seconds"] = round(total, 4)
+    out["sent_lines"] = int(sent_lines)
+    out["total_lines"] = int(total_lines)
+    out["lines_per_second_overall"] = (
+        round(sent_lines / total, 2) if total > 0 and sent_lines > 0 else 0.0
+    )
+    out["outcome"] = outcome
+    return out
+
+
+def log_draw_benchmark(sequence_id, benchmark):
+    """Emit the draw-phase benchmark to the logger using the same shape as job benchmarks."""
+    LOGGER.info(
+        "Draw %s benchmark outcome=%s total=%.3fs prep=%.3fs read=%.3fs controller_wait=%.3fs "
+        "macro_active=%.3fs paused=%.3fs chunks=%d sent=%d/%d (%.2f lines/s)",
+        sequence_id,
+        benchmark["outcome"],
+        benchmark["total_seconds"],
+        benchmark["prep_seconds"],
+        benchmark["read_seconds"],
+        benchmark["controller_wait_seconds"],
+        benchmark["macro_active_seconds"],
+        benchmark["paused_seconds"],
+        benchmark["chunks_count"],
+        benchmark["sent_lines"],
+        benchmark["total_lines"],
+        benchmark["lines_per_second_overall"],
+    )
 
 
 def build_stability_test_macro_lines(pairs, press, wait):
@@ -1554,7 +1965,12 @@ def ensure_partial_macro(sequence_id, layer_id):
     return out_path, len(commands), False
 
 
-def draw_worker(sequence_id, macro_file="macro.txt", start_message="正在发送绘画按键序列"):
+def draw_worker(
+    sequence_id,
+    macro_file="macro.txt",
+    start_message="正在发送绘画按键序列",
+    prep_seconds=0.0,
+):
     entry = find_entry(sequence_id)
     if not entry:
         draw_state.update(
@@ -1562,12 +1978,27 @@ def draw_worker(sequence_id, macro_file="macro.txt", start_message="正在发送
             message="找不到按键序列",
             error="sequence not found",
             finished_at=now_text(),
+            benchmark=None,
         )
         return
 
+    draw_started_perf = time.perf_counter()
+    bench_segments = {
+        "prep_seconds": float(prep_seconds or 0.0),
+        "read_seconds": 0.0,
+        "controller_wait_seconds": 0.0,
+        "macro_active_seconds": 0.0,
+        "paused_seconds": 0.0,
+        "chunks_count": 0,
+    }
+
     macro_path = JOBS_ROOT / sequence_id / macro_file
+    t_read = time.perf_counter()
     lines = flatten_macro_lines(macro_path.read_text(encoding="utf-8").splitlines())
+    bench_segments["read_seconds"] = time.perf_counter() - t_read
+
     total = len(lines)
+    sent_lines = 0
     started_monotonic = time.monotonic()
     draw_state.update(
         status="running",
@@ -1583,13 +2014,18 @@ def draw_worker(sequence_id, macro_file="macro.txt", start_message="正在发送
         finished_at=None,
         pause_requested=False,
         cancel_requested=False,
+        benchmark=None,
     )
     try:
+        t_ctrl = time.perf_counter()
         nx, controller_index = controller.require_connected()
         with controller.macro_lock:
+            bench_segments["controller_wait_seconds"] = time.perf_counter() - t_ctrl
             chunk_start = 0
             while chunk_start < total:
+                t_pause = time.perf_counter()
                 if draw_state.wait_while_paused():
+                    bench_segments["paused_seconds"] += time.perf_counter() - t_pause
                     draw_state.update(message=start_message)
                 if draw_state.is_cancel_requested():
                     break
@@ -1602,9 +2038,13 @@ def draw_worker(sequence_id, macro_file="macro.txt", start_message="正在发送
                 if not chunk_text.strip():
                     update_draw_progress(started_monotonic, chunk_end, total)
                     chunk_start = chunk_end
+                    sent_lines = chunk_end
                     continue
 
+                t_chunk = time.perf_counter()
                 result = run_macro_chunk_until_done_or_interrupted(nx, controller_index, chunk_text)
+                bench_segments["macro_active_seconds"] += time.perf_counter() - t_chunk
+                bench_segments["chunks_count"] += 1
                 if result == "completed":
                     update_draw_progress(
                         started_monotonic,
@@ -1613,6 +2053,7 @@ def draw_worker(sequence_id, macro_file="macro.txt", start_message="正在发送
                         message=f"正在发送第 {chunk_end}/{total} 行",
                     )
                     chunk_start = chunk_end
+                    sent_lines = chunk_end
                     continue
 
                 update_draw_progress(
@@ -1626,18 +2067,22 @@ def draw_worker(sequence_id, macro_file="macro.txt", start_message="正在发送
                     ),
                 )
                 chunk_start = chunk_end
+                sent_lines = chunk_end
                 if result == "cancelled":
                     break
+                t_pause = time.perf_counter()
                 draw_state.wait_while_paused()
+                bench_segments["paused_seconds"] += time.perf_counter() - t_pause
                 draw_state.update(message=start_message)
                 if draw_state.is_cancel_requested():
                     break
         if draw_state.is_cancel_requested():
-            speed, eta = draw_speed_stats(
-                started_monotonic,
-                draw_state.snapshot()["sent_lines"],
-                total,
+            sent_lines = draw_state.snapshot().get("sent_lines", sent_lines) or sent_lines
+            speed, eta = draw_speed_stats(started_monotonic, sent_lines, total)
+            benchmark = finalize_draw_benchmark(
+                bench_segments, draw_started_perf, sent_lines, total, "cancelled"
             )
+            log_draw_benchmark(sequence_id, benchmark)
             draw_state.update(
                 status="cancelled",
                 lines_per_second=speed,
@@ -1646,8 +2091,14 @@ def draw_worker(sequence_id, macro_file="macro.txt", start_message="正在发送
                 finished_at=now_text(),
                 pause_requested=False,
                 cancel_requested=False,
+                benchmark=benchmark,
             )
             return
+        sent_lines = total
+        benchmark = finalize_draw_benchmark(
+            bench_segments, draw_started_perf, sent_lines, total, "completed"
+        )
+        log_draw_benchmark(sequence_id, benchmark)
         draw_state.update(
             status="done",
             percent=100,
@@ -1657,9 +2108,14 @@ def draw_worker(sequence_id, macro_file="macro.txt", start_message="正在发送
             finished_at=now_text(),
             pause_requested=False,
             cancel_requested=False,
+            benchmark=benchmark,
         )
     except Exception as exc:
         log_exception(f"Drawing macro send failed for sequence {sequence_id}", exc)
+        benchmark = finalize_draw_benchmark(
+            bench_segments, draw_started_perf, sent_lines, total, "error"
+        )
+        log_draw_benchmark(sequence_id, benchmark)
         draw_state.update(
             status="error",
             message="绘画发送失败",
@@ -1667,12 +2123,24 @@ def draw_worker(sequence_id, macro_file="macro.txt", start_message="正在发送
             finished_at=now_text(),
             pause_requested=False,
             cancel_requested=False,
+            benchmark=benchmark,
         )
 
 
 @app.route("/", methods=["GET"])
 def index():
-    return render_template_string(INDEX_HTML, buttons=VALID_BUTTONS)
+    lang = request.cookies.get("tomodachi_lang", "") or ""
+    if lang not in ("zh", "en"):
+        lang = "zh"
+    html_lang = "zh-CN" if lang == "zh" else "en"
+    return render_template_string(
+        INDEX_HTML,
+        buttons=VALID_BUTTONS,
+        i18n_catalog=I18N_CATALOG,
+        html_lang=html_lang,
+        ui_lang=lang,
+        zh_to_en_ui=ZH_TO_EN_UI,
+    )
 
 
 @app.errorhandler(Exception)
@@ -1867,13 +2335,15 @@ def api_draw_from_layer(sequence_id, layer_id):
     except Exception as exc:
         log_exception("Cannot start partial drawing because controller is not ready", exc)
         return jsonify({"error": str(exc)}), 400
+    t_prep = time.perf_counter()
     try:
-        macro_path, _line_count, _was_cached = ensure_partial_macro(sequence_id, layer_id)
+        macro_path, _line_count, was_cached = ensure_partial_macro(sequence_id, layer_id)
     except (FileNotFoundError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
         log_exception("Failed to generate partial macro", exc)
         return jsonify({"error": str(exc)}), 500
+    prep_seconds = 0.0 if was_cached else time.perf_counter() - t_prep
     color = layer.get("color") or []
     if len(color) == 3:
         message = (
@@ -1884,6 +2354,7 @@ def api_draw_from_layer(sequence_id, layer_id):
     thread = threading.Thread(
         target=draw_worker,
         args=(sequence_id, macro_path.name, message),
+        kwargs={"prep_seconds": prep_seconds},
         daemon=True,
     )
     thread.start()
